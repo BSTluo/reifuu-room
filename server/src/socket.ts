@@ -68,31 +68,12 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
 
     logger.info(`Client connected: ${user?.username} (${socket.id})`);
 
-    // Join character's chunk room
-    if (character) {
-      socket.join(character.chunkId);
-      logger.info(`${character.nickname} joined chunk room: ${character.chunkId}`);
-
-      // Get current position and ensure it's cached in Redis so other players
-      // in this chunk can discover this player (a player who has never moved
-      // has no Redis entry and would otherwise be invisible to new joiners).
-      const currentPosition = await MovementService.ensurePlayerCached(character.id);
-
-      // 首次连接即探索出生区块 5x5 范围（GDD 2.6 初始视野），并把整份已探索列表发给客户端（迷雾初始化）
-      await ExplorationService.exploreArea(character.id, character.chunkId, 2);
-      const explored = await ExplorationService.getExploredChunks(character.id);
-      socket.emit('map:initial-explored', { chunks: explored });
-
-      // Notify others in chunk that this player entered.
-      // (Sending the list of *existing* players back to this socket is deferred
-      // until it explicitly asks via 'client:request-chunk-players' below, so we
-      // never race against this client's own listener registration.)
-      socket.to(character.chunkId).emit('player:enter-chunk', {
-        characterId: character.id,
-        nickname: character.nickname,
-        position: currentPosition?.position || { x: 0, y: 0 },
-      });
-    }
+    // IMPORTANT: register every event handler synchronously BEFORE any `await`
+    // below. Socket.IO does not buffer incoming events on the server side, so a
+    // client emit that arrives while the async connection setup is still in
+    // flight would otherwise be silently dropped. This is especially critical
+    // for 'client:request-chunk-players', which the client fires immediately
+    // after its own listeners are ready (WorldScene.create).
 
     // Client explicitly asks for the current chunk roster once its own
     // event listeners are registered — avoids the connect-time race where
@@ -214,6 +195,10 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
     socket.on('disconnect', (reason) => {
       logger.info(`Client disconnected: ${user?.username} (${socket.id}), reason: ${reason}`);
 
+      // Stop the Redis position-cache refresher for this socket
+      const timer = (socket.data as SocketData & { cacheRefreshTimer?: NodeJS.Timeout }).cacheRefreshTimer;
+      if (timer) clearInterval(timer);
+
       // Notify chunk that player left
       if (character) {
         socket.to(character.chunkId).emit('player:leave-chunk', {
@@ -226,6 +211,45 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
     socket.on('error', (error) => {
       logger.error(`Socket error for ${socket.id}:`, error);
     });
+
+    // ---- Async connection setup (runs AFTER all handlers are registered) ----
+    // Join character's chunk room
+    if (character) {
+      socket.join(character.chunkId);
+      logger.info(`${character.nickname} joined chunk room: ${character.chunkId}`);
+
+      // Get current position and ensure it's cached in Redis so other players
+      // in this chunk can discover this player (a player who has never moved
+      // has no Redis entry and would otherwise be invisible to new joiners).
+      const currentPosition = await MovementService.ensurePlayerCached(character.id);
+
+      // Keep the player's Redis position fresh while this socket stays connected.
+      // The cache has a 5-minute TTL, so an idle (never-moving) connected user
+      // would otherwise drop out of `getPlayersInChunk` and become invisible to
+      // newly joining players. Refresh periodically to guarantee a connected
+      // player is always discoverable.
+      const cacheRefresh = setInterval(() => {
+        MovementService.ensurePlayerCached(character.id).catch((err) =>
+          logger.error('Failed to refresh player cache', err)
+        );
+      }, 120_000); // every 2 minutes (well under the 5-min TTL)
+      socket.data.cacheRefreshTimer = cacheRefresh;
+
+      // 首次连接即探索出生区块 5x5 范围（GDD 2.6 初始视野），并把整份已探索列表发给客户端（迷雾初始化）
+      await ExplorationService.exploreArea(character.id, character.chunkId, 2);
+      const explored = await ExplorationService.getExploredChunks(character.id);
+      socket.emit('map:initial-explored', { chunks: explored });
+
+      // Notify others in chunk that this player entered.
+      // (Sending the list of *existing* players back to this socket is deferred
+      // until it explicitly asks via 'client:request-chunk-players' above, so we
+      // never race against this client's own listener registration.)
+      socket.to(character.chunkId).emit('player:enter-chunk', {
+        characterId: character.id,
+        nickname: character.nickname,
+        position: currentPosition?.position || { x: 0, y: 0 },
+      });
+    }
   });
 
   return io;

@@ -45,6 +45,8 @@ export class WorldScene extends Phaser.Scene {
   private otherPlayers = new Map<string, OtherPlayerSprite>()
   /** 玩家当前所在区块 ID（用于检测跨区块） */
   private currentChunkId: string | null = null
+  /** socket 层多人事件监听器是否已注册（防止重复注册） */
+  private syncHandlersRegistered = false
   /** chunkId -> 该区块的地形 Blitter 层与迷雾遮罩 */
   private chunkLayers = new Map<string, ChunkLayer>()
 
@@ -81,11 +83,11 @@ export class WorldScene extends Phaser.Scene {
     this.setupMultiplayerSync()
 
     // 监听器注册完成后，主动向服务端请求当前区块内已存在的玩家，
-    // 避免连接时服务端推送早于客户端监听器注册而被丢弃
-    const socket = socketClient.instance
-    if (socket) {
-      socket.emit('client:request-chunk-players')
-    }
+    // 避免连接时服务端推送早于客户端监听器注册而被丢弃。
+    // 如果 socket 尚未就绪（GameView onMounted 与 WorldScene create 的时序差），
+    // 在 socket:connected 事件触发时补发请求。
+    this.onSocketConnected()
+    EventBus.on('socket:connected', this.onSocketConnected)
 
     EventBus.on('ui:move-player', this.onUIMovePlayer)
     EventBus.on('ui:spawn-character', this.onUISpawnCharacter)
@@ -137,6 +139,7 @@ export class WorldScene extends Phaser.Scene {
     EventBus.off('ui:move-player', this.onUIMovePlayer)
     EventBus.off('ui:spawn-character', this.onUISpawnCharacter)
     EventBus.off('exploration:updated', this.onExplorationUpdated)
+    EventBus.off('socket:connected', this.onSocketConnected)
     this.cleanupMultiplayerSync()
     this.destroyAllChunks()
   }
@@ -393,6 +396,8 @@ export class WorldScene extends Phaser.Scene {
   // ==================== 多人同步 ====================
 
   private setupMultiplayerSync(): void {
+    if (this.syncHandlersRegistered) return
+
     const socket = socketClient.instance
     if (!socket) return
 
@@ -401,6 +406,21 @@ export class WorldScene extends Phaser.Scene {
     socket.on('players:position-update', this.onPlayerPositionUpdate)
     socket.on('player:leave-chunk', this.onPlayerLeaveChunk)
     socket.on('player:move-confirmed', this.onMoveConfirmed)
+    this.syncHandlersRegistered = true
+  }
+
+  /**
+   * 请求当前区块内已存在的玩家名单。在 create() 时立即调用一次，
+   * 并在 socket 连接就绪（socket:connected）时补发，覆盖 socket 尚未
+   * 建立或断线重连的时序差。同时补注册 socket 层事件监听器（若
+   * create() 时 socket 尚未创建）。
+   */
+  private onSocketConnected = () => {
+    this.setupMultiplayerSync()
+    const socket = socketClient.instance
+    if (socket) {
+      socket.emit('client:request-chunk-players')
+    }
   }
 
   private cleanupMultiplayerSync(): void {
@@ -415,6 +435,7 @@ export class WorldScene extends Phaser.Scene {
 
     this.otherPlayers.forEach((sprite) => sprite.destroy())
     this.otherPlayers.clear()
+    this.syncHandlersRegistered = false
   }
 
   private onPlayersInChunk = (data: {

@@ -143,6 +143,11 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 
 1. **世界观坐标 bug**：旧数据把区块内坐标当世界坐标存（(5,5) 而非 (325,325)），导致多人不在同一区块、互相看不见。已在 `CharacterService` 修复 + 用 `server/fix_character_positions.sql` / JS 脚本迁移存量。现存角色坐标已世界化。
 2. **同区块玩家互相可见**：此前 `getPlayersInChunk` 只扫 Redis，而"从未移动"的玩家无 Redis 键 → 别人看不到他。修复：新增 `MovementService.ensurePlayerCached()`（连接时把 DB 位置写回 Redis）＋ `client:request-chunk-players` 握手（客户端注册完监听器后再请求名单，避免推送早于监听注册的竞态）。
+   - **2026-09 深层根因修复（此前 §7.2 的握手方案并未真正生效）**：
+     - **服务端 handler 注册竞态**：`io.on('connection')` 回调是 `async`，原代码把 `socket.on('client:request-chunk-players', …)` 注册在三个 `await` 之后。Socket.IO 服务端**不会缓冲**未注册 handler 的入站事件 → 客户端连接后立刻发的名单请求在异步 setup 完成前到达即被静默丢弃。修复：所有 `socket.on(...)` 同步注册在前，`await` 异步 setup（加房间、`ensurePlayerCached`、探索、enter-chunk 广播）挪到回调末尾（见 `server/src/socket.ts`）。
+     - **Redis 位置缓存 5 分钟 TTL**：连接但一直不动的老玩家，其 `player:{id}:position` 键 300s 后过期 → 新进玩家看不到他。修复：连接后每 120s 调 `ensurePlayerCached` 刷新（`cacheRefreshTimer`，在 `disconnect` 时清理）。
+     - **客户端 socket 时序兜底**：若 `WorldScene.create()` 时 socket 尚未建立（GameView onMounted 与 Phaser 场景启动的时序差）或断线重连，原代码既不注册 socket 监听也不发名单请求。修复：`create()` 立即调 `onSocketConnected()` 并订阅 `EventBus` 的 `socket:connected`（scene shutdown 时 `off`）；`onSocketConnected` 会补注册监听器（`syncHandlersRegistered` 防重）+ 补发 `client:request-chunk-players`。
+     - **Redis 位置缓存的自延续陷阱**：`getPlayerPosition` 优先读 Redis，miss 才回 DB → 手改 DB 位置后 Redis 旧值会一直自我延续，测试时必须先清 `reifuu:player:*:position` 与 `character:user:{userId}` 两类缓存（E2E 验证时踩过：DB 已改 10_10，Redis 缓存还是 11_10 导致误判修复无效）。
 3. **地图块类型不同步**：之前用 `Math.random()` 每端各自随机 → 地形不一致。修复：新增 `client/reifuu-chat/src/game/utils/rng.ts`（FNV-1a 哈希 + mulberry32 确定性 PRNG），`WorldScene.generateMap(chunkId)` 用 `chunkId` 做种子，同一区块所有玩家生成一致地形。
 4. **登录卡加载 / 刷新才正常**：多为后端未运行（转圈）、或 token 持久化未验证即自动登入。相关：App.vue 的 loading 判定、401 处理、登录后 `loadCharacter`；CharacterCreateView 有「退出」按钮兜底。
 5. **API 性能**：角色存在性检查已加 Redis 缓存（命中 ~15ms）+ MySQL 连接池调优（queueLimit/connectTimeout/maxIdle/idleTimeout + 每条查询 5s 超时）+ 慢查询日志。
