@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Test</title>
+</head>
+<body>
+    <h1>登录与角色加载测试</h1>
+    <div id="output"></div>
+
+    <script>
+        const output = document.getElementById('output');
+
+        function log(msg) {
+            output.innerHTML += msg + '<br>';
+            console.log(msg);
+        }
+
+        async function test() {
+            try {
+                // 1. 登录
+                log('1. 尝试登录...');
+                const loginResp = await fetch('http://localhost:3000/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        usernameOrEmail: 'testuser',
+                        password: 'test123456'
+                    })
+                });
+
+                log(`登录响应状态: ${loginResp.status}`);
+                const loginData = await loginResp.json();
+                log(`登录响应: ${JSON.stringify(loginData).substring(0, 100)}...`);
+
+                if (loginData.status !== 'success') {
+                    log('❌ 登录失败');
+                    return;
+                }
+
+                const token = loginData.data.accessToken;
+                log(`✅ 获得token: ${token.substring(0, 20)}...`);
+
+                // 2. 获取角色
+                log('2. 尝试获取角色...');
+                const charResp = await fetch('http://localhost:3000/character/me', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                log(`角色响应状态: ${charResp.status}`);
+                const charData = await charResp.json();
+                log(`角色响应: ${JSON.stringify(charData)}`);
+
+                if (charResp.status === 404) {
+                    log('✅ 用户没有角色（404正常）');
+                } else if (charData.status === 'success') {
+                    log('✅ 获取角色成功');
+                } else {
+                    log('❌ 角色API返回错误');
+                }
+
+            } catch (error) {
+                log(`❌ 错误: ${error.message}`);
+                console.error(error);
+            }
+        }
+
+        test();
+    </script>
+</body>
+</html>

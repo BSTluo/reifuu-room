@@ -1,0 +1,19 @@
+
+> reifuu-room-server@1.0.0 dev
+> nodemon --exec tsx src/index.ts
+
+[33m[nodemon] 3.1.14[39m
+[33m[nodemon] to restart at any time, enter `rs`[39m
+[33m[nodemon] watching path(s): *.*[39m
+[33m[nodemon] watching extensions: ts,json[39m
+[32m[nodemon] starting `tsx src/index.ts`[39m
+◇ injected env (19) from .env // tip: ◈ secrets for agents [www.dotenvx.com]
+[32minfo[39m: Redis connection established {"timestamp":"2026-09-01T23:55:25.932Z"}
+[32minfo[39m: Redis client connected {"timestamp":"2026-09-01T23:55:26.016Z"}
+[32minfo[39m: Redis connected successfully {"timestamp":"2026-09-01T23:55:26.016Z"}
+[32minfo[39m: MySQL connection established {"timestamp":"2026-09-01T23:55:26.444Z"}
+[32minfo[39m: MySQL connection test successful {"timestamp":"2026-09-01T23:55:26.526Z"}
+[32minfo[39m: Server running on port 3000 in development mode {"timestamp":"2026-09-01T23:55:26.528Z"}
+[32minfo[39m: REST API: http://localhost:3000 {"timestamp":"2026-09-01T23:55:26.528Z"}
+[32minfo[39m: WebSocket: ws://localhost:3000 {"timestamp":"2026-09-01T23:55:26.528Z"}
+[31m[nodemon] app crashed - waiting for file changes before starting...[39m
