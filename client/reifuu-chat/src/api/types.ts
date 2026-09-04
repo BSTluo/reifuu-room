@@ -103,3 +103,33 @@ export interface RoomMemberDTO {
   characterId: string
   nickname: string
 }
+
+// ==================== 好友系统 (GDD §2.7) ====================
+
+export interface FriendDTO {
+  characterId: number
+  nickname: string
+  isOnline: boolean
+  currentChunkId: string | null
+  friendSince: string
+}
+
+export interface FriendRequestDTO {
+  requestId: number
+  fromCharacterId: number
+  fromNickname: string
+  message: string | null
+  createdAt: string
+}
+
+export type MailboxMessageType = 'friend_request' | 'system' | 'chat'
+
+export interface MailboxMessageDTO {
+  id: number
+  type: MailboxMessageType
+  senderId: number | null
+  senderNickname: string | null
+  content: Record<string, any>
+  isRead: boolean
+  createdAt: string
+}

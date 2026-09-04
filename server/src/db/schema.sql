@@ -166,3 +166,48 @@ CREATE TABLE IF NOT EXISTS explored_chunks (
     INDEX idx_character (character_id),
     FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Friendships table (bidirectional pair, id1 < id2, GDD 2.7)
+CREATE TABLE IF NOT EXISTS friendships (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    character_id_1 INT NOT NULL,
+    character_id_2 INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_interact_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (character_id_1) REFERENCES characters(id) ON DELETE CASCADE,
+    FOREIGN KEY (character_id_2) REFERENCES characters(id) ON DELETE CASCADE,
+    UNIQUE KEY idx_friendship_pair (character_id_1, character_id_2),
+    INDEX idx_char1 (character_id_1),
+    INDEX idx_char2 (character_id_2)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Friend requests table (GDD 2.7)
+CREATE TABLE IF NOT EXISTS friend_requests (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    from_character_id INT NOT NULL,
+    to_character_id INT NOT NULL,
+    status ENUM('pending', 'accepted', 'rejected') DEFAULT 'pending',
+    message VARCHAR(200),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    responded_at TIMESTAMP NULL,
+    FOREIGN KEY (from_character_id) REFERENCES characters(id) ON DELETE CASCADE,
+    FOREIGN KEY (to_character_id) REFERENCES characters(id) ON DELETE CASCADE,
+    INDEX idx_to_status (to_character_id, status),
+    INDEX idx_from_status (from_character_id, status),
+    INDEX idx_pair (from_character_id, to_character_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Messages table (mailbox: friend_request / system / chat, GDD 2.7)
+CREATE TABLE IF NOT EXISTS messages (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    receiver_id INT NOT NULL,
+    sender_id INT NULL,
+    type ENUM('friend_request', 'system', 'chat') NOT NULL,
+    content JSON NOT NULL,
+    is_read BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (receiver_id) REFERENCES characters(id) ON DELETE CASCADE,
+    FOREIGN KEY (sender_id) REFERENCES characters(id) ON DELETE SET NULL,
+    INDEX idx_receiver_read (receiver_id, is_read),
+    INDEX idx_receiver_type (receiver_id, type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -10,6 +10,10 @@ import { useCharacterStore } from '../stores/character'
 import { useInventoryStore } from '../stores/inventory'
 import { useRoomStore } from '../stores/room'
 import ChatPanel from '../components/game/HUD/ChatPanel.vue'
+import FriendListPanel from '../components/game/HUD/FriendListPanel.vue'
+import MailboxPanel from '../components/game/HUD/MailboxPanel.vue'
+import PlayerInfoCard from '../components/game/HUD/PlayerInfoCard.vue'
+import { useFriendStore } from '../stores/friend'
 import { apiGet, apiPost, ApiRequestError } from '../api/http'
 import type { BuildTemplateDTO, OwnedChunkDTO } from '../api/types'
 
@@ -18,6 +22,7 @@ const explorationStore = useExplorationStore()
 const characterStore = useCharacterStore()
 const inventoryStore = useInventoryStore()
 const roomStore = useRoomStore()
+const friendStore = useFriendStore()
 
 const phaserReady = ref(false)
 const lastPosition = ref({ x: 0, y: 0 })
@@ -31,6 +36,11 @@ const ownedChunks = ref<OwnedChunkDTO[]>([])
 const buildForm = ref({ roomName: '' })
 const buildMessage = ref<{ text: string; type: 'info' | 'warn' | 'error' | 'success' } | null>(null)
 const building = ref(false)
+
+// ---- 好友系统 ----
+const showFriendList = ref(false)
+const showMailbox = ref(false)
+const playerInfo = ref<{ characterId: number; nickname: string } | null>(null)
 
 const ITEM_LABELS: Record<string, string> = {
   wood: '木材',
@@ -143,6 +153,23 @@ function onEnterRoom(payload: { roomId: string }) {
   roomStore.enterRoom(payload.roomId)
 }
 
+// ---- 好友系统事件 ----
+function onShowPlayerInfo(payload: { characterId: number; nickname: string }) {
+  playerInfo.value = payload
+}
+
+function onFriendNewRequest() {
+  friendStore.onNewRequest()
+}
+
+function onFriendRequestResult() {
+  friendStore.onRequestResult()
+}
+
+function onFriendOnlineStatus(payload: { characterId: number; isOnline: boolean }) {
+  friendStore.updateOnlineStatus(payload.characterId, payload.isOnline)
+}
+
 const toast = ref<{ text: string; type: string } | null>(null)
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -180,6 +207,10 @@ onMounted(() => {
   EventBus.on('player:chunk-changed', onChunkChanged)
   EventBus.on('game:toast', onToast)
   EventBus.on('ui:enter-room', onEnterRoom)
+  EventBus.on('ui:show-player-info', onShowPlayerInfo)
+  EventBus.on('friend:new-request', onFriendNewRequest)
+  EventBus.on('friend:request-result', onFriendRequestResult)
+  EventBus.on('friend:online-status', onFriendOnlineStatus)
 
   // 迷雾 store 先在 socket 建立前监听，确保不遗漏 map:initial-explored / map:explore 事件
   explorationStore.startListening()
@@ -191,6 +222,11 @@ onMounted(() => {
 
   // 初始拉取背包
   refreshInventory()
+
+  // 初始拉取好友数据
+  friendStore.fetchFriends()
+  friendStore.fetchPendingRequests()
+  friendStore.fetchUnreadCount()
 })
 
 onBeforeUnmount(() => {
@@ -203,6 +239,10 @@ onBeforeUnmount(() => {
   EventBus.off('player:chunk-changed', onChunkChanged)
   EventBus.off('game:toast', onToast)
   EventBus.off('ui:enter-room', onEnterRoom)
+  EventBus.off('ui:show-player-info', onShowPlayerInfo)
+  EventBus.off('friend:new-request', onFriendNewRequest)
+  EventBus.off('friend:request-result', onFriendRequestResult)
+  EventBus.off('friend:online-status', onFriendOnlineStatus)
   if (toastTimer) clearTimeout(toastTimer)
   explorationStore.stopListening()
   socketClient.disconnect()
@@ -240,6 +280,21 @@ onBeforeUnmount(() => {
           🎒 背包 ({{ inventoryStore.usedSlots }}/{{ inventoryStore.capacity }})
         </button>
         <button class="action-btn" @click="openBuildMenu">🏠 建造</button>
+        <button class="action-btn" @click="showFriendList = !showFriendList">
+          👥 好友 ({{ friendStore.friends.length }})
+        </button>
+        <button class="action-btn" @click="showMailbox = !showMailbox">
+          ✉️ 信箱
+          <span v-if="friendStore.unreadCount > 0" class="unread-badge">{{ friendStore.unreadCount }}</span>
+        </button>
+      </div>
+
+      <div v-if="showFriendList" class="panel">
+        <FriendListPanel />
+      </div>
+
+      <div v-if="showMailbox" class="panel">
+        <MailboxPanel />
       </div>
 
       <div v-if="roomStore.inRoom" class="panel chat-panel-wrap">
@@ -305,6 +360,13 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+
+    <PlayerInfoCard
+        v-if="playerInfo"
+        :character-id="playerInfo.characterId"
+        :nickname="playerInfo.nickname"
+        @close="playerInfo = null"
+    />
   </div>
 </template>
 
@@ -505,6 +567,19 @@ onBeforeUnmount(() => {
 .visibility {
   float: right;
   color: #68829a;
+}
+.unread-badge {
+  display: inline-block;
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+  padding: 0 4px;
+  margin-left: 4px;
+  background: #e0533d;
+  color: #fff;
+  border-radius: 8px;
+  font-size: 10px;
+  text-align: center;
 }
 .toast {
   position: absolute;

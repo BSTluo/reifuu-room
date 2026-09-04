@@ -26,6 +26,12 @@ export interface ServerToClientEvents {
   'plugin:deactivated': (data: { roomId: string; pluginId: string }) => void
   'plugin:state': (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => void
   'plugin:list': (data: { roomId: string; plugins: Array<{ pluginId: string; state: Record<string, unknown> }> }) => void
+  // Friend events (server -> client)
+  'friend:new-request': (data: { request: { requestId: number; fromCharacterId: number; fromNickname: string; message: string | null; createdAt: string } }) => void
+  'friend:request-sent': (data: { request: { requestId: number; fromCharacterId: number; fromNickname: string; message: string | null; createdAt: string } }) => void
+  'friend:request-result': (data: { requestId: number; status: 'accepted' | 'rejected'; responderCharacterId: number }) => void
+  'friend:responded': (data: { result: { status: 'accepted' | 'rejected'; fromCharacterId: number; toCharacterId: number } }) => void
+  'friend:online-status': (data: { characterId: number; isOnline: boolean }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -41,6 +47,9 @@ export interface ClientToServerEvents {
   'plugin:activate': (data: { roomId: string; pluginId: string }) => void
   'plugin:deactivate': (data: { roomId: string; pluginId: string }) => void
   'plugin:state-sync': (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => void
+  // Friend events (client -> server)
+  'friend:send-request': (data: { toCharacterId: number; message?: string }) => void
+  'friend:respond': (data: { requestId: number; accept: boolean }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -125,6 +134,23 @@ class SocketClient {
     })
     this.socket.on('plugin:list', (data: { roomId: string; plugins: Array<{ pluginId: string; state: Record<string, unknown> }> }) => {
       EventBus.emit('plugin:list', data)
+    })
+
+    // Friend events: forward to EventBus for Vue components
+    this.socket.on('friend:new-request', (data: { request: { requestId: number; fromCharacterId: number; fromNickname: string; message: string | null; createdAt: string } }) => {
+      EventBus.emit('friend:new-request', data)
+    })
+    this.socket.on('friend:request-sent', (data: { request: { requestId: number; fromCharacterId: number; fromNickname: string; message: string | null; createdAt: string } }) => {
+      EventBus.emit('friend:request-sent', data)
+    })
+    this.socket.on('friend:request-result', (data: { requestId: number; status: 'accepted' | 'rejected'; responderCharacterId: number }) => {
+      EventBus.emit('friend:request-result', data)
+    })
+    this.socket.on('friend:responded', (data: { result: { status: 'accepted' | 'rejected'; fromCharacterId: number; toCharacterId: number } }) => {
+      EventBus.emit('friend:responded', data)
+    })
+    this.socket.on('friend:online-status', (data: { characterId: number; isOnline: boolean }) => {
+      EventBus.emit('friend:online-status', data)
     })
 
     this.socket.on('disconnect', (reason) => {

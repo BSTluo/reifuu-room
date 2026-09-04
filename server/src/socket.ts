@@ -11,6 +11,7 @@ import InventoryService from './services/InventoryService.js';
 import ChatMessageService from './services/ChatMessageService.js';
 import PluginService from './services/PluginService.js';
 import BuildService from './services/BuildService.js';
+import FriendService from './services/FriendService.js';
 import { query } from './db/mysql.js';
 
 interface SocketData {
@@ -405,6 +406,75 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       }
     });
 
+    // ---- Friend events ----
+    // Send a friend request (real-time delivery if target is online)
+    socket.on('friend:send-request', async (data: { toCharacterId: number; message?: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const result = await FriendService.sendFriendRequest(
+          Number(character.id),
+          Number(data?.toCharacterId),
+          data?.message ? String(data.message).slice(0, 200) : undefined
+        );
+
+        // Acknowledge to sender
+        socket.emit('friend:request-sent', { request: result });
+
+        // Deliver to target in real-time if online
+        const targetId = Number(data?.toCharacterId);
+        const online = await FriendService.getOnlineStatus([targetId]);
+        if (online.get(targetId)) {
+          io.to(`character:${targetId}`).emit('friend:new-request', {
+            request: {
+              requestId: result.requestId,
+              fromCharacterId: result.fromCharacterId,
+              fromNickname: result.fromNickname,
+              message: result.message,
+              createdAt: result.createdAt,
+            },
+          });
+        }
+      } catch (error: any) {
+        logger.error('Friend send-request error', error);
+        socket.emit('error', { message: error.message || 'Failed to send friend request' });
+      }
+    });
+
+    // Respond to a friend request (accept/reject)
+    socket.on('friend:respond', async (data: { requestId: number; accept: boolean }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const result = await FriendService.respondToRequest(
+          Number(data?.requestId),
+          Number(character.id),
+          data?.accept === true
+        );
+
+        // Acknowledge to responder
+        socket.emit('friend:responded', { result });
+
+        // Notify the requester in real-time if online
+        const requesterId = result.fromCharacterId;
+        const online = await FriendService.getOnlineStatus([requesterId]);
+        if (online.get(requesterId)) {
+          io.to(`character:${requesterId}`).emit('friend:request-result', {
+            requestId: Number(data?.requestId),
+            status: result.status,
+            responderCharacterId: result.toCharacterId,
+          });
+        }
+      } catch (error: any) {
+        logger.error('Friend respond error', error);
+        socket.emit('error', { message: error.message || 'Failed to respond to friend request' });
+      }
+    });
+
     // ---- Disconnect handler ----
     socket.on('disconnect', (reason) => {
       logger.info(`Client disconnected: ${user?.username} (${socket.id}), reason: ${reason}`);
@@ -418,6 +488,21 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
         socket.to(character.chunkId).emit('player:leave-chunk', {
           characterId: character.id,
         });
+
+        // Mark character offline and notify online friends
+        FriendService.setCharacterOffline(Number(character.id))
+          .then(async () => {
+            const friends = await FriendService.getFriends(Number(character.id));
+            for (const f of friends) {
+              if (f.isOnline) {
+                io.to(`character:${f.characterId}`).emit('friend:online-status', {
+                  characterId: Number(character.id),
+                  isOnline: false,
+                });
+              }
+            }
+          })
+          .catch((err) => logger.error('Failed to set character offline', err));
 
         // If the player was inside a chat room, refresh that room's member list
         const roomId = (socket.data as SocketData).currentRoomId;
@@ -439,7 +524,24 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
     // Join character's chunk room
     if (character) {
       socket.join(character.chunkId);
+      // Join a per-character room so friend events can be delivered by characterId
+      socket.join(`character:${character.id}`);
       logger.info(`${character.nickname} joined chunk room: ${character.chunkId}`);
+
+      // Mark character online (Redis set) and notify online friends
+      FriendService.setCharacterOnline(Number(character.id))
+        .then(async () => {
+          const friends = await FriendService.getFriends(Number(character.id));
+          for (const f of friends) {
+            if (f.isOnline) {
+              io.to(`character:${f.characterId}`).emit('friend:online-status', {
+                characterId: Number(character.id),
+                isOnline: true,
+              });
+            }
+          }
+        })
+        .catch((err) => logger.error('Failed to set character online', err));
 
       // Get current position and ensure it's cached in Redis so other players
       // in this chunk can discover this player (a player who has never moved

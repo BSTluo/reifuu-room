@@ -208,11 +208,54 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 ### 7.4 注意事项
 - `random_public` 依赖 `map_chunks.is_public = true`，而 BuildService 建造时默认 `is_public = FALSE`。需玩家主动调用 `POST /build/visibility { isPublic: true }` 后才有公开地块可选。空池时返回 404 + 友好提示。
 - 无主池范围固定 0–20，若世界扩展超过此范围需调整候选网格或改用动态扫描。
-- 邀请制出生（Phase 3）尚未实现，当前仅两种 GDD §2.1 规定的出生方式。
+- ~~邀请制出生~~ 尚未实现（Phase 3），当前仅两种 GDD §2.1 规定的出生方式。
 
 ---
 
-## 8. 测试账号（仍在数据库中）
+## 8. ⭐ 好友系统（GDD §2.7，✅ 前后端均已完成）
+
+**任务状态**：已完成。支持好友申请（附留言）、接受/拒绝、好友列表（在线状态）、删除好友、信箱（好友申请/系统消息）、未读数。端到端 E2E 测试 37/37 通过（2026-09-04）。
+
+### 8.1 数据库
+- **迁移脚本 `server/add_friend_system.sql`**（已执行）：3 张新表，`schema.sql` 同步更新：
+  - `friendships`：双向存储（id1 < id2 保证唯一），`character_id_1/2` 外键 CASCADE。
+  - `friend_requests`：`status ENUM('pending','accepted','rejected')`、`message VARCHAR(200)`（申请附言）、`responded_at`。无 pair 唯一约束 → 被拒后可重新申请。
+  - `messages`（信箱）：`receiver_id`、`sender_id`（系统消息为 NULL）、`type ENUM('friend_request','system','chat')`、`content JSON`、`is_read`。
+- ⚠️ 若旧库已存在 `friend_requests` 但缺 `message` 列（早期迁移版本），需手动 `ALTER TABLE friend_requests ADD COLUMN message VARCHAR(200) NULL AFTER status`（本次交接已踩坑：CREATE TABLE IF NOT EXISTS 不会补列）。
+
+### 8.2 后端
+- **服务 `server/src/services/FriendService.ts`**：
+  - `sendFriendRequest(from, to, message)`：校验非自己、目标存在、非好友、无 pending 申请（双向检查）、好友上限 50。成功后：写 `friend_requests` + 给收件人写信箱消息（`friend_request` 类型，JSON content 含 from 昵称/留言）。
+  - `respondToRequest(requestId, characterId, accept)`：仅收件人可操作（403）；accept → 双向插入 `friendships` + 请求标记 accepted + 给申请人写系统信箱消息；reject → 仅更新请求状态。重复响应 409。
+  - `getFriends(characterId)`：查双向好友，Redis Set `online:characters` 判断在线（node-redis v4+ 的 `sIsMember` 返回数字需 `Boolean()` 包裹），在线优先排序。
+  - `removeFriend`（好友不存在返回 404）、`getFriendCount`、`isFriend`。
+  - 信箱：`getMailbox`（按时间倒序，含发送者昵称）、`markMessageRead`、`getUnreadCount`、`createMailboxMessage`。
+- **REST `server/src/routes/friend.ts`**（挂载于 `/friend`，全部需 authenticate + requireCharacter）：
+  - `GET /friend/list`、`DELETE /friend/:characterId`、`POST /friend/request`、`POST /friend/request/:requestId/respond`、`GET /friend/requests/pending`、`GET /friend/mailbox`、`POST /friend/mailbox/:messageId/read`、`GET /friend/mailbox/unread-count`。
+- **Socket（`server/src/socket.ts`）**：
+  - 新增 `friend:send-request` / `friend:respond` 事件（同步注册在异步 setup 之前，避免 handler 注册竞态——同 §10.2 教训）。
+  - 每个连接加入房间 `character:{characterId}` → 按角色精确推送。
+  - 连接时 `setCharacterOnline` + 通知在线好友 `friend:online-status`；断开时 `setCharacterOffline` + 通知。
+  - 客户端事件：`friend:new-request`、`friend:request-result`、`friend:responded`、`friend:online-status`。
+
+### 8.3 前端
+- **类型/Store**：`api/types.ts` 新增 `FriendDTO`/`FriendRequestDTO`/`MailboxMessageDTO`；`http.ts` 新增 `apiDelete`；`stores/friend.ts` Pinia store 封装全部 friend API + 在线状态更新。
+- **组件**（`components/game/HUD/`）：
+  - `FriendListPanel.vue`：好友列表（在线绿点/离线灰点、在线优先排序、删除按钮、实时在线状态更新）。
+  - `MailboxPanel.vue`：信箱（全部/好友申请/系统消息 tab、好友申请直接接受/拒绝、标记已读）。
+  - `PlayerInfoCard.vue`：点击其他玩家弹出的信息卡（昵称 + 「加好友」带可选留言）。
+- **交互入口**：`OtherPlayerSprite` 设为可点击（`setInteractive` + pointerdown → `ui:show-player-info` 事件携带 characterId/nickname）；`GameView.vue` HUD 加「好友」/「信箱」按钮（信箱带未读红点角标）。
+
+### 8.4 验证方式
+- E2E 测试（临时脚本已清理）：37 项断言全通过 —— 申请/重复申请(409)/反向申请(409)/自加(400)/pending 列表/信箱含申请消息/非收件人响应(403)/接受建好友/双向列表/重复响应(409)/接受系统消息/已是好友再申请(409)/标记已读/未读归零/删除好友/删非好友(404)/拒绝流程/重新申请/Redis 在线 Set 格式。
+- 服务端 `tsc --noEmit` + 前端 `vue-tsc --noEmit` 均通过。
+
+### 8.5 未实现（后续 Phase 3）
+- 好友传送（5-10 分钟冷却，需 MovementService 集成）、飞鸽传书（跨区块/离线留言，按距离延迟送达）、隐身模式、拉黑（Phase 5）。
+
+---
+
+## 9. 测试账号（仍在数据库中）
 
 | 账号 | 密码 | 角色 | 出生区块 | 世界坐标 |
 |---|---|---|---|---|
@@ -224,7 +267,7 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 
 ---
 
-## 9. 关键修复记录（重要背景，别再踩坑）
+## 10. 关键修复记录（重要背景，别再踩坑）
 
 1. **世界观坐标 bug**：旧数据把区块内坐标当世界坐标存（(5,5) 而非 (325,325)），导致多人不在同一区块、互相看不见。已在 `CharacterService` 修复 + 用 `server/fix_character_positions.sql` / JS 脚本迁移存量。现存角色坐标已世界化。
 2. **同区块玩家互相可见**：此前 `getPlayersInChunk` 只扫 Redis，而"从未移动"的玩家无 Redis 键 → 别人看不到他。修复：新增 `MovementService.ensurePlayerCached()`（连接时把 DB 位置写回 Redis）＋ `client:request-chunk-players` 握手（客户端注册完监听器后再请求名单，避免推送早于监听注册的竞态）。
@@ -241,12 +284,12 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 
 ---
 
-## 10. 已知问题 / 待确认
+## 11. 已知问题 / 待确认
 
 - **初始视野范围口径已统一**：GDD 2.6 写 5x5，服务端已用 `exploreArea(..., 2)` = 5x5。若策划后续改口径，改 `server/src/socket.ts` 的半径。
 - ~~前端迷雾完全未做~~（**已解决**，§5.2 完成）。
 - 小地图、资源节点/建造/聊天室前端交互 UI（**已补齐**：`WorldScene` 资源节点渲染 + `GameView` 背包/建造面板）。
-- 好友系统 / 交通工具系统 / 传送门系统仍未实现（GDD Phase 3/4）。
+- 好友系统（✅ 已完成，见 §8）/ 交通工具系统 / 传送门系统仍未实现（GDD Phase 3/4）。
 - 聊天室成员角色（房主/成员/访客）目前仅有房主 vs 访客二分，邀请制与成员管理未实现（见 §6.2）。
 - 数据库 `192.168.12.1` 是内网地址，换环境/远程时需改 `.env`（曾有短暂不可达导致 500）。
 - **表结构迁移注意**：`schema.sql` 用 `CREATE TABLE IF NOT EXISTS`，不会 ALTER 已存在的表。若在旧库上跑 schema，`map_chunks` / `resource_nodes` / `inventory_items` / `chat_rooms` 等新列需手动迁移或删表重建（本次交接中 `map_chunks` 因缺 `chunk_id/chunk_type/owner_id/is_public` 列已重建）。
@@ -254,13 +297,14 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 
 ---
 
-## 11. 下一步建议（给下个团队）
+## 12. 下一步建议（给下个团队）
 
 1. 先通读本文件 + `docs/GDD.md` + `docs/ART_STYLE_GUIDE.md`（此目录不是 git 仓库）。
 2. ~~视野迷雾前端~~（**已完成** §5.2）。
 3. ~~复核现有 API 的前端对接~~（**已完成**：资源采集/建造/背包/聊天室均已端到端联通并 REST 验证通过）。
 4. ~~进入聊天室实际使用~~（**已完成** §6）：点击房屋标记 → 进入房间 → 实时文字聊天，前后端 + 浏览器 UI 均验证通过。
 5. **聊天室进阶功能**：房间权限管理（成员角色/邀请制）、音乐/视频同步播放、房间装饰系统。
-6. 规划 Phase 3（好友/社交、传送门）与 Phase 4（交通工具）。
-7. 建议为前端新增 UI/UX 专职成员补齐界面质感（该角色上一团队已移除）。
-8. 前端接入正式美术资源时替换 `PreloadScene` 的 Graphics 生成贴图（贴图 key 不变即可平滑替换）。
+6. ~~好友系统核心~~（**已完成** §8）。Phase 3 剩余：好友传送（冷却 5-10min）、飞鸽传书（跨区块延迟留言）、隐身模式、传送门。
+7. 规划 Phase 4（交通工具）。
+8. 建议为前端新增 UI/UX 专职成员补齐界面质感（该角色上一团队已移除）。
+9. 前端接入正式美术资源时替换 `PreloadScene` 的 Graphics 生成贴图（贴图 key 不变即可平滑替换）。

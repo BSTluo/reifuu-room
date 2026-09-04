@@ -74,6 +74,20 @@ export type GameEvents = {
   'plugin:state': { roomId: string; pluginId: string; state: Record<string, unknown> }
   /** 加入房间时服务端下发当前已激活插件列表 */
   'plugin:list': { roomId: string; plugins: Array<{ pluginId: string; state: Record<string, unknown> }> }
+
+  // Friend system (GDD §2.7)
+  /** 收到新的好友请求（实时推送） */
+  'friend:new-request': { request: { requestId: number; fromCharacterId: number; fromNickname: string; message: string | null; createdAt: string } }
+  /** 好友请求已发送（本客户端确认） */
+  'friend:request-sent': { request: { requestId: number; fromCharacterId: number; fromNickname: string; message: string | null; createdAt: string } }
+  /** 好友请求处理结果（发起方收到：accepted/rejected） */
+  'friend:request-result': { requestId: number; status: 'accepted' | 'rejected'; responderCharacterId: number }
+  /** 好友请求已处理（本客户端确认） */
+  'friend:responded': { result: { status: 'accepted' | 'rejected'; fromCharacterId: number; toCharacterId: number } }
+  /** 好友在线状态变化 */
+  'friend:online-status': { characterId: number; isOnline: boolean }
+  /** UI 请求查看某玩家信息卡（点击其他玩家） */
+  'ui:show-player-info': { characterId: number; nickname: string }
 }
 
 export const EventBus = mitt<GameEvents>()

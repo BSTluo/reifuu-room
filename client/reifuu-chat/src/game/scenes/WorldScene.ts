@@ -513,7 +513,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.otherPlayers.has(data.characterId)) return
 
     const { x, y } = gridToIso(data.position.x, data.position.y)
-    const sprite = new OtherPlayerSprite(this, x, y, data.nickname)
+    const sprite = new OtherPlayerSprite(this, x, y, data.nickname, data.characterId)
     this.otherPlayers.set(data.characterId, sprite)
   }
 
