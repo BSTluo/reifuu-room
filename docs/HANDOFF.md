@@ -214,14 +214,16 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 
 ## 8. ⭐ 好友系统（GDD §2.7，✅ 前后端均已完成）
 
-**任务状态**：已完成。支持好友申请（附留言）、接受/拒绝、好友列表（在线状态）、删除好友、信箱（好友申请/系统消息）、未读数、**好友传送**（5 分钟冷却）、**好友私聊频道**。端到端 E2E 测试：好友核心 37/37 + 好友传送 25/25 + 好友私聊 24/24 全通过（2026-09-04）。
+**任务状态**：已完成。支持好友申请（附留言）、接受/拒绝、好友列表（在线状态）、删除好友、信箱（好友申请/系统消息）、未读数、**好友传送**（5 分钟冷却）、**好友私聊频道**、**飞鸽传书**（跨区块延迟留言）。端到端 E2E 测试：好友核心 37/37 + 好友传送 25/25 + 好友私聊 24/24 + 飞鸽传书 37/37 全通过（2026-09-04）。
 
 ### 8.1 数据库
 - **迁移脚本 `server/add_friend_system.sql`**（已执行）：3 张新表，`schema.sql` 同步更新：
   - `friendships`：双向存储（id1 < id2 保证唯一），`character_id_1/2` 外键 CASCADE。
   - `friend_requests`：`status ENUM('pending','accepted','rejected')`、`message VARCHAR(200)`（申请附言）、`responded_at`。无 pair 唯一约束 → 被拒后可重新申请。
-  - `messages`（信箱）：`receiver_id`、`sender_id`（系统消息为 NULL）、`type ENUM('friend_request','system','chat')`、`content JSON`、`is_read`。
+  - `messages`（信箱）：`receiver_id`、`sender_id`（系统消息为 NULL）、`type ENUM('friend_request','system','chat','pigeon')`、`content JSON`、`is_read`。
 - ⚠️ 若旧库已存在 `friend_requests` 但缺 `message` 列（早期迁移版本），需手动 `ALTER TABLE friend_requests ADD COLUMN message VARCHAR(200) NULL AFTER status`（本次交接已踩坑：CREATE TABLE IF NOT EXISTS 不会补列）。
+- **飞鸽传书迁移 `server/add_pigeon_system.sql`**（已执行）：`pigeon_messages` 表（延迟投递队列）+ `messages.type` ENUM 扩展 `'pigeon'` + `characters.reject_stranger_pigeon`（隐私设置，MySQL 5.7 需手动 `ALTER TABLE characters ADD COLUMN reject_stranger_pigeon BOOLEAN DEFAULT FALSE`）。
+  - ⚠️ 若旧库已存在 `pigeon_messages` 但为早期草案结构（`from_character_id`/`to_character_id`/`deliver_at`），需先 `DROP TABLE pigeon_messages` 再重跑迁移（本次交接已踩坑：CREATE TABLE IF NOT EXISTS 不会改列）。
 
 ### 8.2 后端
 - **服务 `server/src/services/FriendService.ts`**：
@@ -230,6 +232,7 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
   - `getFriends(characterId)`：查双向好友，Redis Set `online:characters` 判断在线（node-redis v4+ 的 `sIsMember` 返回数字需 `Boolean()` 包裹），在线优先排序。
   - `removeFriend`（好友不存在返回 404）、`getFriendCount`、`isFriend`。
   - 信箱：`getMailbox`（按时间倒序，含发送者昵称）、`markMessageRead`、`getUnreadCount`、`createMailboxMessage`。
+  - 飞鸽传书：`sendPigeonMessage`/`processDuePigeonMessages`/`getPigeonMessages`/`getPigeonSettings`/`updatePigeonSettings`（详见 §8.6）。投递定时任务在 `server/src/index.ts`：**每 10 秒** `setInterval` 调 `processDuePigeonMessages()`，对每条到期消息 `io.to('character:{receiverId}').emit('friend:pigeon-delivered', ...)`。
 - **REST `server/src/routes/friend.ts`**（挂载于 `/friend`，全部需 authenticate + requireCharacter）：
   - `GET /friend/list`、`DELETE /friend/:characterId`、`POST /friend/request`、`POST /friend/request/:requestId/respond`、`GET /friend/requests/pending`、`GET /friend/mailbox`、`POST /friend/mailbox/:messageId/read`、`GET /friend/mailbox/unread-count`。
 - **Socket（`server/src/socket.ts`）**：
@@ -269,8 +272,26 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
   - `GameView.vue`：注册/转发上述事件，收到 `friend:message-received` 时若非当前聊天窗口则 toast + 刷新未读数。
 - **验证**：E2E 24/24 通过 —— 非好友(404)/空内容(400)/超长(400)/发送成功(DB 落库+content JSON)/历史正序/双向可见/标记已读(仅 receiver 侧 is_read)/socket 实时送达(跨区块)/socket 发送确认/发送者视角 is_read=false。
 
-### 8.6 未实现（后续 Phase 3）
-- 飞鸽传书（跨区块/离线留言，按距离延迟送达）、隐身模式、拉黑（Phase 5）。
+### 8.6 飞鸽传书（GDD §2.7 飞鸽传书，✅ 已完成）
+- **服务 `FriendService`**（"飞鸽传书（GDD §2.7）"小节）：
+  - `sendPigeonMessage(fromCharacterId, toCharacterId, content)`：校验内容非空/trim ≤200 字(400) → 非自己(400) → 接收者存在(404) → 隐私设置：非好友且接收者开启 `reject_stranger_pigeon` → 403（**好友不受该设置影响**）→ 冷却：5 分钟窗口内每发送者最多 3 条（查 `pigeon_messages` 计数）→ 超限 429。
+  - 距离与延迟：`calculateChunkDistance`（**切比雪夫距离** `max(|dx|,|dy|)`，chunkId 格式 `x_y`）→ `calculatePigeonDelay`：distance≤1（同/相邻区块）→ **0 秒即时**；同大洲（|dx|,|dy| 都 ≤ 世界半径内同洲判定）→ 600 秒；跨大洲 → 1350 秒；`has_traffic_channel` 当前固定 false（交通工具系统未实现）。
+  - **延迟缩放 `PIGEON_DELAY_SCALE` 环境变量**（默认 1）：**DB 存储未缩放 delaySeconds**（600/1350），扫描 SQL 用 `TIMESTAMPDIFF(SECOND, sent_at, NOW()) >= calculated_delay * delayScale` 比较；`sendPigeonMessage` 用 `round(delaySeconds * delayScale)` 判定即时送达（0）并回报客户端。测试用 `PIGEON_DELAY_SCALE=0.01`（600s→6s）。
+  - 即时送达（缩放后=0）：直接写 `delivered_at=NOW()` + 写信箱 `messages`（`type='pigeon'`，`content JSON {text, pigeonId, senderNickname}`）+ 未读 +1，返回 `deliveredAt` 非空；否则 `delivered_at=NULL`（传递中），返回 `deliveredAt: null`。
+  - `processDuePigeonMessages()`（定时投递，index.ts **每 10 秒** `setInterval` 调用）：扫描到期的消息 → 写 `delivered_at` + 写信箱 → 返回 `{pigeonId, receiverId, senderNickname, content}` 列表，index.ts 对每条 `io.to('character:'+receiverId).emit('friend:pigeon-delivered', {...})`（离线则下次登录看信箱）。
+  - `getPigeonMessages(characterId)`：收到的飞鸽列表（`delivered_at IS NOT NULL`），带 senderNickname；`getPigeonSettings/updatePigeonSettings`：读写 `reject_stranger_pigeon`。
+- **REST**（⚠️ Express 路由顺序陷阱）：`GET/POST /friend/pigeon/settings` 必须注册在 `POST /friend/pigeon/:characterId` **之前**，否则 `settings` 被当作 characterId 解析。另：`GET /friend/pigeon`（收件列表）。
+- **前端**：
+  - `types.ts`：`MailboxMessageType` += `'pigeon'`；`PigeonMessageDTO`、`PigeonSettingsDTO`。
+  - `stores/friend.ts`：pigeon 状态 + `fetchPigeonMessages`/`fetchPigeonSettings`/`updatePigeonSettings`/`sendPigeonMessage`/`openPigeonCompose`/`closePigeonCompose`/`onPigeonDelivered`。⚠️ 服务端返回形状：发消息 → `{pigeon}`；列表 → `{pigeons}`；设置 → 直接返回对象（不包裹）。
+  - `SocketClient.ts`/`EventBus.ts`：`friend:pigeon-delivered` socket 事件 + `ui:open-pigeon-compose`/`ui:close-pigeon-compose`。
+  - `PigeonComposePanel.vue`（新）：撰写窗口（目标昵称、textarea ≤200、字数、发送、即时/延迟/错误反馈、`formatDelay` 显示预计送达时间）。
+  - `MailboxPanel.vue` 飞鸽 tab + 回信按钮；`FriendListPanel.vue` 飞鸽按钮；`PlayerInfoCard.vue` 飞鸽传书按钮（**好友和陌生人都可发**）。
+  - `GameView.vue`：注册 EventBus 转发、`friend:pigeon-delivered` → toast + 刷新信箱，onMounted 拉取飞鸽列表 + 设置。
+- **验证**：E2E 37/37 通过 —— 内容校验（空/超长/自己/不存在）、同区块即时（DB delivered_at、信箱写入、未读+1、列表含 senderNickname、distance=0）、陌生人拒绝设置（403、好友不受影响）、冷却（429）、跨区块延迟投递 + 定时任务 + socket 通知（含 pigeonId/senderNickname/content）、设置关闭。
+
+### 8.7 未实现（后续 Phase 3）
+- 隐身模式、拉黑（Phase 5）。飞鸽传书 ✓ 已完成（§8.6）。
 
 ---
 
@@ -323,7 +344,7 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 3. ~~复核现有 API 的前端对接~~（**已完成**：资源采集/建造/背包/聊天室均已端到端联通并 REST 验证通过）。
 4. ~~进入聊天室实际使用~~（**已完成** §6）：点击房屋标记 → 进入房间 → 实时文字聊天，前后端 + 浏览器 UI 均验证通过。
 5. **聊天室进阶功能**：房间权限管理（成员角色/邀请制）、音乐/视频同步播放、房间装饰系统。
-6. ~~好友系统核心~~（**已完成** §8）。Phase 3 剩余：好友传送（✅ 已完成）、好友私聊（✅ 已完成）、飞鸽传书（跨区块延迟留言）、隐身模式、传送门。
+6. ~~好友系统核心~~（**已完成** §8）。Phase 3 剩余：好友传送（✅ 已完成）、好友私聊（✅ 已完成）、飞鸽传书（✅ 已完成 §8.6）、隐身模式、传送门。
 7. 规划 Phase 4（交通工具）。
 8. 建议为前端新增 UI/UX 专职成员补齐界面质感（该角色上一团队已移除）。
 9. 前端接入正式美术资源时替换 `PreloadScene` 的 Graphics 生成贴图（贴图 key 不变即可平滑替换）。

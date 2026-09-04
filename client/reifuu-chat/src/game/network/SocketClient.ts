@@ -36,6 +36,8 @@ export interface ServerToClientEvents {
   // Friend private chat (server -> client)
   'friend:message-received': (data: { message: PrivateMessagePayload }) => void
   'friend:message-sent': (data: { message: PrivateMessagePayload }) => void
+  // Pigeon mail (server -> client)
+  'friend:pigeon-delivered': (data: { pigeonId: number; senderId: number; senderNickname: string; content: string }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -176,6 +178,9 @@ class SocketClient {
     })
     this.socket.on('friend:message-sent', (data: { message: PrivateMessagePayload }) => {
       EventBus.emit('friend:message-sent', data)
+    })
+    this.socket.on('friend:pigeon-delivered', (data: { pigeonId: number; senderId: number; senderNickname: string; content: string }) => {
+      EventBus.emit('friend:pigeon-delivered', data)
     })
 
     this.socket.on('disconnect', (reason) => {

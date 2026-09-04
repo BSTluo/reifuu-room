@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { apiGet, apiPost, apiDelete, ApiRequestError } from '../api/http'
-import type { FriendDTO, FriendRequestDTO, MailboxMessageDTO, MailboxMessageType, PrivateMessageDTO } from '../api/types'
+import type { FriendDTO, FriendRequestDTO, MailboxMessageDTO, MailboxMessageType, PrivateMessageDTO, PigeonMessageDTO, PigeonSettingsDTO } from '../api/types'
 import { useUserStore } from './user'
 import { useCharacterStore } from './character'
 
@@ -16,6 +16,14 @@ interface FriendState {
   privateChatFriendId: number | null
   /** 当前私聊窗口对端昵称 */
   privateChatFriendNickname: string | null
+  /** 飞鸽传书收件列表 */
+  pigeonMessages: PigeonMessageDTO[]
+  /** 飞鸽传书隐私设置 */
+  pigeonSettings: PigeonSettingsDTO
+  /** 飞鸽传书撰写窗口目标 characterId */
+  pigeonComposeTargetId: number | null
+  /** 飞鸽传书撰写窗口目标昵称 */
+  pigeonComposeTargetNickname: string | null
 }
 
 export const useFriendStore = defineStore('friend', {
@@ -28,6 +36,10 @@ export const useFriendStore = defineStore('friend', {
     privateMessages: {},
     privateChatFriendId: null,
     privateChatFriendNickname: null,
+    pigeonMessages: [],
+    pigeonSettings: { rejectStrangerPigeon: false },
+    pigeonComposeTargetId: null,
+    pigeonComposeTargetNickname: null,
   }),
   actions: {
     async fetchFriends(): Promise<void> {
@@ -178,6 +190,67 @@ export const useFriendStore = defineStore('friend', {
         console.warn('mark conversation read failed', err)
       }
     },
+    /** 飞鸽传书：获取收件列表 */
+    async fetchPigeonMessages(): Promise<void> {
+      const userStore = useUserStore()
+      try {
+        const data = await apiGet<{ pigeons: PigeonMessageDTO[] }>(
+          '/friend/pigeon',
+          userStore.accessToken ?? undefined
+        )
+        this.pigeonMessages = data.pigeons ?? []
+      } catch (err) {
+        console.warn('fetch pigeon messages failed', err)
+      }
+    },
+    /** 飞鸽传书：获取隐私设置 */
+    async fetchPigeonSettings(): Promise<void> {
+      const userStore = useUserStore()
+      try {
+        const data = await apiGet<PigeonSettingsDTO>(
+          '/friend/pigeon/settings',
+          userStore.accessToken ?? undefined
+        )
+        this.pigeonSettings = data ?? { rejectStrangerPigeon: false }
+      } catch (err) {
+        console.warn('fetch pigeon settings failed', err)
+      }
+    },
+    /** 飞鸽传书：更新隐私设置 */
+    async updatePigeonSettings(rejectStrangerPigeon: boolean): Promise<void> {
+      const userStore = useUserStore()
+      const data = await apiPost<PigeonSettingsDTO>(
+        '/friend/pigeon/settings',
+        { rejectStrangerPigeon },
+        userStore.accessToken ?? undefined
+      )
+      this.pigeonSettings = data ?? { rejectStrangerPigeon }
+    },
+    /** 飞鸽传书：发送消息，返回 PigeonMessageInfo（含 calculatedDelay/deliveredAt） */
+    async sendPigeonMessage(toCharacterId: number, content: string): Promise<PigeonMessageDTO> {
+      const userStore = useUserStore()
+      const data = await apiPost<{ pigeon: PigeonMessageDTO }>(
+        `/friend/pigeon/${toCharacterId}`,
+        { content },
+        userStore.accessToken ?? undefined
+      )
+      return data.pigeon
+    },
+    /** 飞鸽传书：打开撰写窗口 */
+    openPigeonCompose(characterId: number, nickname: string): void {
+      this.pigeonComposeTargetId = characterId
+      this.pigeonComposeTargetNickname = nickname
+    },
+    /** 飞鸽传书：关闭撰写窗口 */
+    closePigeonCompose(): void {
+      this.pigeonComposeTargetId = null
+      this.pigeonComposeTargetNickname = null
+    },
+    /** 飞鸽传书：收到投递通知时刷新列表与未读数 */
+    onPigeonDelivered(): void {
+      this.fetchPigeonMessages()
+      this.fetchUnreadCount()
+    },
     reset() {
       this.friends = []
       this.pendingRequests = []
@@ -186,6 +259,10 @@ export const useFriendStore = defineStore('friend', {
       this.privateMessages = {}
       this.privateChatFriendId = null
       this.privateChatFriendNickname = null
+      this.pigeonMessages = []
+      this.pigeonSettings = { rejectStrangerPigeon: false }
+      this.pigeonComposeTargetId = null
+      this.pigeonComposeTargetNickname = null
     },
   },
 })

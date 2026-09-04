@@ -115,11 +115,11 @@ router.get('/requests/pending', async (req: Request, res: Response, next: NextFu
 
 // ==================== 信箱 ====================
 
-// GET /friend/mailbox  query: ?type=friend_request|system|chat
+// GET /friend/mailbox  query: ?type=friend_request|system|chat|pigeon
 router.get('/mailbox', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const character = await requireCharacter(req);
-    const type = req.query.type as 'friend_request' | 'system' | 'chat' | undefined;
+    const type = req.query.type as 'friend_request' | 'system' | 'chat' | 'pigeon' | undefined;
     const messages = await FriendService.getMailbox(Number(character.id), type);
     res.json({ status: 'success', data: { messages } });
   } catch (error) {
@@ -180,6 +180,67 @@ router.post('/messages/:characterId/read', async (req: Request, res: Response, n
 
     await FriendService.markConversationRead(Number(character.id), friendCharacterId);
     res.json({ status: 'success', message: 'Conversation marked as read' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ==================== 飞鸽传书（GDD §2.7） ====================
+
+// GET /friend/pigeon/settings —— 获取飞鸽传书隐私设置
+// NOTE: Must be registered before /pigeon/:characterId to avoid "settings" being captured as :characterId.
+router.get('/pigeon/settings', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const character = await requireCharacter(req);
+    const settings = await FriendService.getPigeonSettings(Number(character.id));
+    res.json({ status: 'success', data: settings });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /friend/pigeon/settings —— 更新飞鸽传书隐私设置  body: { rejectStrangerPigeon: boolean }
+// NOTE: Must be registered before /pigeon/:characterId to avoid "settings" being captured as :characterId.
+router.post('/pigeon/settings', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const character = await requireCharacter(req);
+    const rejectStrangerPigeon = req.body?.rejectStrangerPigeon === true;
+    const settings = await FriendService.updatePigeonSettings(
+      Number(character.id),
+      rejectStrangerPigeon
+    );
+    res.json({ status: 'success', data: settings });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /friend/pigeon/:characterId —— 发送飞鸽传书  body: { content: string }
+router.post('/pigeon/:characterId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const character = await requireCharacter(req);
+    const toCharacterId = parseInt(String(req.params.characterId), 10);
+    if (!Number.isFinite(toCharacterId)) throw new AppError('Invalid characterId', 400);
+
+    const { content } = req.body ?? {};
+    const pigeon = await FriendService.sendPigeonMessage(
+      Number(character.id),
+      toCharacterId,
+      String(content ?? '')
+    );
+
+    res.status(201).json({ status: 'success', data: { pigeon } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /friend/pigeon —— 获取已收到的飞鸽传书列表
+router.get('/pigeon', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const character = await requireCharacter(req);
+    const pigeons = await FriendService.getPigeonMessages(Number(character.id));
+    res.json({ status: 'success', data: { pigeons } });
   } catch (error) {
     next(error);
   }

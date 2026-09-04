@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useFriendStore } from '../../../stores/friend'
+import { EventBus } from '../../../game/EventBus'
 import type { FriendDTO } from '../../../api/types'
 
 const props = defineProps<{
@@ -34,6 +35,15 @@ async function sendFriendRequest() {
     sending.value = false
   }
 }
+
+/** 给该玩家发飞鸽传书（陌生人也可） */
+function sendPigeon() {
+  EventBus.emit('ui:open-pigeon-compose', {
+    characterId: props.characterId,
+    nickname: props.nickname,
+  })
+  emit('close')
+}
 </script>
 
 <template>
@@ -62,6 +72,8 @@ async function sendFriendRequest() {
             {{ sending ? '发送中...' : '发送好友请求' }}
           </button>
         </template>
+
+        <button class="pigeon-send-btn" @click="sendPigeon">飞鸽传书</button>
 
         <p v-if="sendResult" class="send-result" :class="`result-${sendResult.type}`">
           {{ sendResult.text }}
@@ -157,6 +169,18 @@ async function sendFriendRequest() {
 .send-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.pigeon-send-btn {
+  padding: 8px;
+  background: #3a2a4a;
+  color: #c0a0e0;
+  border: 1px solid #5c3a6a;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.pigeon-send-btn:hover {
+  background: #4a3a5a;
 }
 .send-result {
   margin: 0;

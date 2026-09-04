@@ -8,6 +8,7 @@ import pool from './db/mysql.js';
 import { connectRedis } from './db/redis.js';
 import { initializeSocketIO } from './socket.js';
 import ResourceService from './services/ResourceService.js';
+import FriendService from './services/FriendService.js';
 
 import healthRouter from './routes/health.js';
 import authRouter from './routes/auth.js';
@@ -49,6 +50,25 @@ setInterval(() => {
     logger.error('Resource respawn tick failed', err)
   );
 }, 60_000);
+
+// Periodically deliver due pigeon messages (GDD §2.7 飞鸽传书延迟投递)
+setInterval(() => {
+  FriendService.processDuePigeonMessages()
+    .then((delivered) => {
+      for (const msg of delivered) {
+        io.to(`character:${msg.receiverId}`).emit('friend:pigeon-delivered', {
+          pigeonId: msg.pigeonId,
+          senderId: msg.senderId,
+          senderNickname: msg.senderNickname,
+          content: msg.content,
+        });
+      }
+      if (delivered.length > 0) {
+        logger.info(`Delivered ${delivered.length} pigeon message(s)`);
+      }
+    })
+    .catch((err) => logger.error('Pigeon delivery tick failed', err));
+}, 10_000);
 
 const testDatabaseConnection = async () => {
   try {

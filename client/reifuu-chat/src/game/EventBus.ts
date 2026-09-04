@@ -103,6 +103,14 @@ export type GameEvents = {
   'ui:open-private-chat': { characterId: number; nickname: string }
   /** UI 请求关闭私聊窗口 */
   'ui:close-private-chat': void
+
+  // Pigeon mail (GDD §2.7 飞鸽传书)
+  /** 飞鸽传书已投递（实时推送） */
+  'friend:pigeon-delivered': { pigeonId: number; senderId: number; senderNickname: string; content: string }
+  /** UI 请求打开飞鸽传书撰写窗口 */
+  'ui:open-pigeon-compose': { characterId: number; nickname: string }
+  /** UI 请求关闭飞鸽传书撰写窗口 */
+  'ui:close-pigeon-compose': void
 }
 
 export const EventBus = mitt<GameEvents>()

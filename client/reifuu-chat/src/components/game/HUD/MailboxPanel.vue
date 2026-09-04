@@ -30,6 +30,7 @@ function typeLabel(type: MailboxMessageType): string {
   if (type === 'friend_request') return '好友请求'
   if (type === 'system') return '系统'
   if (type === 'chat') return '好友消息'
+  if (type === 'pigeon') return '飞鸽传书'
   return '消息'
 }
 
@@ -73,6 +74,15 @@ function onNewRequest() {
   friendStore.fetchUnreadCount()
 }
 
+/** 回信：打开飞鸽传书撰写窗口，目标为原发件人 */
+function replyPigeon(msg: MailboxMessageDTO) {
+  if (!msg.senderId || !msg.senderNickname) return
+  EventBus.emit('ui:open-pigeon-compose', {
+    characterId: msg.senderId,
+    nickname: msg.senderNickname,
+  })
+}
+
 onMounted(() => {
   EventBus.on('friend:new-request', onNewRequest)
   friendStore.fetchMailbox()
@@ -91,6 +101,7 @@ onBeforeUnmount(() => {
       <button :class="{ active: activeTab === 'all' }" @click="activeTab = 'all'">全部</button>
       <button :class="{ active: activeTab === 'friend_request' }" @click="activeTab = 'friend_request'">好友请求</button>
       <button :class="{ active: activeTab === 'chat' }" @click="activeTab = 'chat'">好友消息</button>
+      <button :class="{ active: activeTab === 'pigeon' }" @click="activeTab = 'pigeon'">飞鸽传书</button>
       <button :class="{ active: activeTab === 'system' }" @click="activeTab = 'system'">系统</button>
     </div>
 
@@ -122,6 +133,12 @@ onBeforeUnmount(() => {
                 :disabled="responding.has(msg.id)"
                 @click.stop="rejectRequest(msg)"
               >拒绝</button>
+            </div>
+          </template>
+          <template v-else-if="msg.type === 'pigeon'">
+            <p class="msg-text">"{{ msg.content?.text ?? '' }}"</p>
+            <div v-if="msg.senderId" class="msg-actions">
+              <button class="reply-btn" @click.stop="replyPigeon(msg)">回信</button>
             </div>
           </template>
           <template v-else>
@@ -203,6 +220,10 @@ onBeforeUnmount(() => {
   background: #2a3a4a;
   color: #80b0e0;
 }
+.type-pigeon {
+  background: #3a2a4a;
+  color: #c0a0e0;
+}
 .msg-sender {
   font-size: 12px;
   font-weight: bold;
@@ -252,6 +273,18 @@ onBeforeUnmount(() => {
 .accept-btn:disabled, .reject-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.reply-btn {
+  padding: 4px 12px;
+  background: #3a2a4a;
+  color: #c0a0e0;
+  border: 1px solid #5c3a6a;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.reply-btn:hover {
+  background: #4a3a5a;
 }
 .empty {
   margin: 0;

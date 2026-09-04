@@ -52,6 +52,14 @@ function openPrivateChat(friend: FriendDTO) {
   })
 }
 
+/** 给好友发飞鸽传书 */
+function sendPigeon(friend: FriendDTO) {
+  EventBus.emit('ui:open-pigeon-compose', {
+    characterId: friend.characterId,
+    nickname: friend.nickname,
+  })
+}
+
 function onOnlineStatus(payload: { characterId: number; isOnline: boolean }) {
   friendStore.updateOnlineStatus(payload.characterId, payload.isOnline)
 }
@@ -83,6 +91,7 @@ onBeforeUnmount(() => {
         </div>
         <span class="since">{{ formatSince(friend.friendSince) }}</span>
         <button class="msg-btn" @click="openPrivateChat(friend)">消息</button>
+        <button class="pigeon-btn" @click="sendPigeon(friend)">飞鸽</button>
         <button
           v-if="friend.isOnline"
           class="teleport-btn"
@@ -211,6 +220,18 @@ onBeforeUnmount(() => {
 }
 .msg-btn:hover {
   background: #3c503c;
+}
+.pigeon-btn {
+  padding: 4px 8px;
+  background: #3a2a4a;
+  color: #c0a0e0;
+  border: 1px solid #5c3a6a;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.pigeon-btn:hover {
+  background: #4a3a5a;
 }
 .empty {
   margin: 0;

@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS characters (
     appearance JSON NOT NULL,
     start_continent ENUM('east', 'south', 'west', 'north') NOT NULL,
     spawn_method VARCHAR(30) NULL,
+    reject_stranger_pigeon BOOLEAN DEFAULT FALSE,
     current_chunk_id VARCHAR(50) NOT NULL,
     grid_x FLOAT DEFAULT 0,
     grid_y FLOAT DEFAULT 0,
@@ -197,12 +198,12 @@ CREATE TABLE IF NOT EXISTS friend_requests (
     INDEX idx_pair (from_character_id, to_character_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Messages table (mailbox: friend_request / system / chat, GDD 2.7)
+-- Messages table (mailbox: friend_request / system / chat / pigeon, GDD 2.7)
 CREATE TABLE IF NOT EXISTS messages (
     id INT AUTO_INCREMENT PRIMARY KEY,
     receiver_id INT NOT NULL,
     sender_id INT NULL,
-    type ENUM('friend_request', 'system', 'chat') NOT NULL,
+    type ENUM('friend_request', 'system', 'chat', 'pigeon') NOT NULL,
     content JSON NOT NULL,
     is_read BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -210,4 +211,21 @@ CREATE TABLE IF NOT EXISTS messages (
     FOREIGN KEY (sender_id) REFERENCES characters(id) ON DELETE SET NULL,
     INDEX idx_receiver_read (receiver_id, is_read),
     INDEX idx_receiver_type (receiver_id, type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Pigeon messages table (delayed delivery queue, GDD §2.7 飞鸽传书)
+CREATE TABLE IF NOT EXISTS pigeon_messages (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    sender_id INT NOT NULL,
+    receiver_id INT NOT NULL,
+    content VARCHAR(200) NOT NULL,
+    distance INT NOT NULL DEFAULT 0,
+    has_traffic_channel BOOLEAN DEFAULT FALSE,
+    calculated_delay INT NOT NULL DEFAULT 0,
+    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    delivered_at TIMESTAMP NULL,
+    FOREIGN KEY (sender_id) REFERENCES characters(id) ON DELETE CASCADE,
+    FOREIGN KEY (receiver_id) REFERENCES characters(id) ON DELETE CASCADE,
+    INDEX idx_receiver_delivered (receiver_id, delivered_at),
+    INDEX idx_delivered (delivered_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

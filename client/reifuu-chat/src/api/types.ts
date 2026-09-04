@@ -122,7 +122,7 @@ export interface FriendRequestDTO {
   createdAt: string
 }
 
-export type MailboxMessageType = 'friend_request' | 'system' | 'chat'
+export type MailboxMessageType = 'friend_request' | 'system' | 'chat' | 'pigeon'
 
 export interface MailboxMessageDTO {
   id: number
@@ -143,4 +143,23 @@ export interface PrivateMessageDTO {
   content: { text: string }
   isRead: boolean
   createdAt: string
+}
+
+/** 飞鸽传书消息 (GDD §2.7 飞鸽传书) */
+export interface PigeonMessageDTO {
+  id: number
+  senderId: number
+  receiverId: number
+  senderNickname: string
+  content: string
+  distance: number
+  hasTrafficChannel: boolean
+  calculatedDelay: number
+  sentAt: string
+  deliveredAt: string | null
+}
+
+/** 飞鸽传书隐私设置 (GDD §2.7 隐私设置) */
+export interface PigeonSettingsDTO {
+  rejectStrangerPigeon: boolean
 }

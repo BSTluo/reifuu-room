@@ -4,6 +4,7 @@ import logger from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
 import MovementService from './MovementService.js';
 import ExplorationService from './ExplorationService.js';
+import config from '../config.js';
 
 /** 好友上限（GDD §2.7 好友列表功能） */
 export const FRIEND_LIMIT = 50;
@@ -29,7 +30,7 @@ export interface FriendRequestInfo {
 
 export interface MailboxMessageInfo {
   id: number;
-  type: 'friend_request' | 'system' | 'chat';
+  type: 'friend_request' | 'system' | 'chat' | 'pigeon';
   senderId: number | null;
   senderNickname: string | null;
   content: Record<string, any>;
@@ -46,6 +47,20 @@ export interface PrivateMessageInfo {
   content: { text: string };
   isRead: boolean;
   createdAt: string;
+}
+
+/** 飞鸽传书消息（GDD §2.7 飞鸽传书） */
+export interface PigeonMessageInfo {
+  id: number;
+  senderId: number;
+  receiverId: number;
+  senderNickname: string;
+  content: string;
+  distance: number;
+  hasTrafficChannel: boolean;
+  calculatedDelay: number;
+  sentAt: string;
+  deliveredAt: string | null;
 }
 
 /** 在线角色集合的 Redis key（服务端内部使用，需自行加 prefixKey） */
@@ -391,7 +406,7 @@ export class FriendService {
   /** 写入一条信箱消息（服务内部使用） */
   async createMailboxMessage(
     receiverId: number,
-    type: 'friend_request' | 'system' | 'chat',
+    type: 'friend_request' | 'system' | 'chat' | 'pigeon',
     senderId: number | null,
     content: Record<string, any>
   ): Promise<number> {
@@ -405,7 +420,7 @@ export class FriendService {
   /** 获取信箱消息列表（按类型筛选可选） */
   async getMailbox(
     characterId: number,
-    type?: 'friend_request' | 'system' | 'chat'
+    type?: 'friend_request' | 'system' | 'chat' | 'pigeon'
   ): Promise<MailboxMessageInfo[]> {
     let sql = `SELECT m.id, m.type, m.sender_id, m.content, m.is_read, m.created_at, c.nickname AS sender_nickname
        FROM messages m
@@ -544,6 +559,287 @@ export class FriendService {
        WHERE type = 'chat' AND receiver_id = ? AND sender_id = ?`,
       [characterId, friendCharacterId]
     );
+  }
+
+  // ==================== 飞鸽传书（GDD §2.7） ====================
+
+  /**
+   * 发送飞鸽传书。
+   * 校验：内容非空且 ≤200 字、不能发给自己、接收者存在、
+   *   陌生人检查（接收者开启了 reject_stranger_pigeon 且非好友则拒绝）、
+   *   冷却检查（每 5 分钟最多 3 条）。
+   * 计算：根据双方区块距离 & 交通渠道计算延迟。
+   * 延迟为 0 时立即投递；否则写入 pigeon_messages 等待定时扫描。
+   */
+  async sendPigeonMessage(
+    fromCharacterId: number,
+    toCharacterId: number,
+    content: string
+  ): Promise<PigeonMessageInfo> {
+    if (!content || content.trim().length === 0) {
+      throw new AppError('飞鸽传书内容不能为空', 400);
+    }
+    if (content.length > 200) {
+      throw new AppError('飞鸽传书内容不能超过 200 字', 400);
+    }
+    if (fromCharacterId === toCharacterId) {
+      throw new AppError('不能给自己发飞鸽传书', 400);
+    }
+
+    // 校验接收者存在
+    const receiverRows: any = await query(
+      'SELECT id, nickname, start_continent, current_chunk_id, reject_stranger_pigeon FROM characters WHERE id = ?',
+      [toCharacterId]
+    );
+    if (!Array.isArray(receiverRows) || receiverRows.length === 0) {
+      throw new AppError('接收者不存在', 404);
+    }
+    const receiver = receiverRows[0];
+
+    // 陌生人检查
+    const isFriend = await this.isFriend(fromCharacterId, toCharacterId);
+    if (Boolean(receiver.reject_stranger_pigeon) && !isFriend) {
+      throw new AppError('对方已开启拒绝陌生人飞鸽传书', 403);
+    }
+
+    // 冷却检查：每 5 分钟最多 3 条
+    const cooldownRows: any = await query(
+      `SELECT COUNT(*) AS cnt FROM pigeon_messages
+       WHERE sender_id = ? AND sent_at > DATE_SUB(NOW(), INTERVAL 5 MINUTE)`,
+      [fromCharacterId]
+    );
+    if (Number(cooldownRows[0]?.cnt ?? 0) >= 3) {
+      throw new AppError('飞鸽传书发送过于频繁，每 5 分钟最多 3 条', 429);
+    }
+
+    // 获取发送者位置信息
+    const senderRows: any = await query(
+      'SELECT id, nickname, start_continent, current_chunk_id FROM characters WHERE id = ?',
+      [fromCharacterId]
+    );
+    const sender = senderRows[0];
+
+    // 计算区块距离
+    const distance = this.calculateChunkDistance(
+      String(sender.current_chunk_id),
+      String(receiver.current_chunk_id)
+    );
+
+    // 计算延迟（秒）
+    const sameContinent = sender.start_continent === receiver.start_continent;
+    const { delaySeconds, hasTrafficChannel } = this.calculatePigeonDelay(
+      distance,
+      sameContinent
+    );
+
+    // 应用延迟缩放（E2E 测试用）
+    const scaledDelay = Math.round(delaySeconds * config.pigeon.delayScale);
+
+    const msgContent = { text: content.trim() };
+
+    if (scaledDelay === 0) {
+      // 即时投递：写入 pigeon_messages（delivered_at 立即设置）+ 写入信箱
+      const insert: any = await query(
+        `INSERT INTO pigeon_messages (sender_id, receiver_id, content, distance, has_traffic_channel, calculated_delay, delivered_at)
+         VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+        [fromCharacterId, toCharacterId, content.trim(), distance, hasTrafficChannel, delaySeconds]
+      );
+      await this.createMailboxMessage(
+        toCharacterId,
+        'pigeon',
+        fromCharacterId,
+        { text: content.trim(), pigeonId: insert.insertId }
+      );
+
+      return {
+        id: insert.insertId,
+        senderId: fromCharacterId,
+        receiverId: toCharacterId,
+        senderNickname: sender.nickname,
+        content: content.trim(),
+        distance,
+        hasTrafficChannel,
+        calculatedDelay: delaySeconds,
+        sentAt: new Date().toISOString(),
+        deliveredAt: new Date().toISOString(),
+      };
+    }
+
+    // 延迟投递：写入 pigeon_messages，delivered_at 为 NULL
+    const insert: any = await query(
+      `INSERT INTO pigeon_messages (sender_id, receiver_id, content, distance, has_traffic_channel, calculated_delay)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [fromCharacterId, toCharacterId, content.trim(), distance, hasTrafficChannel, delaySeconds]
+    );
+
+    return {
+      id: insert.insertId,
+      senderId: fromCharacterId,
+      receiverId: toCharacterId,
+      senderNickname: sender.nickname,
+      content: content.trim(),
+      distance,
+      hasTrafficChannel,
+      calculatedDelay: scaledDelay,
+      sentAt: new Date().toISOString(),
+      deliveredAt: null,
+    };
+  }
+
+  /**
+   * 处理到期飞鸽传书：扫描 delivered_at IS NULL 且已过延迟时间的消息，
+   * 标记已投递并写入接收者信箱。
+   * 返回已投递的消息列表（供 socket 层通知在线接收者）。
+   */
+  async processDuePigeonMessages(): Promise<Array<{
+    pigeonId: number;
+    senderId: number;
+    receiverId: number;
+    senderNickname: string;
+    content: string;
+  }>> {
+    // 查找到期的飞鸽传书
+    const dueRows: any = await query(
+      `SELECT pm.id, pm.sender_id, pm.receiver_id, pm.content, pm.sent_at, pm.calculated_delay,
+              s.nickname AS sender_nickname
+       FROM pigeon_messages pm
+       LEFT JOIN characters s ON s.id = pm.sender_id
+       WHERE pm.delivered_at IS NULL
+         AND TIMESTAMPDIFF(SECOND, pm.sent_at, NOW()) >= pm.calculated_delay * ?
+       LIMIT 100`,
+      [config.pigeon.delayScale > 0 ? config.pigeon.delayScale : 1]
+    );
+
+    if (!Array.isArray(dueRows) || dueRows.length === 0) {
+      return [];
+    }
+
+    const delivered: Array<{
+      pigeonId: number;
+      senderId: number;
+      receiverId: number;
+      senderNickname: string;
+      content: string;
+    }> = [];
+
+    for (const r of dueRows) {
+      // 标记已投递
+      await query(
+        'UPDATE pigeon_messages SET delivered_at = NOW() WHERE id = ? AND delivered_at IS NULL',
+        [r.id]
+      );
+      // 写入信箱
+      await this.createMailboxMessage(
+        Number(r.receiver_id),
+        'pigeon',
+        Number(r.sender_id),
+        { text: r.content, pigeonId: r.id }
+      );
+
+      delivered.push({
+        pigeonId: Number(r.id),
+        senderId: Number(r.sender_id),
+        receiverId: Number(r.receiver_id),
+        senderNickname: r.sender_nickname ?? '未知',
+        content: r.content,
+      });
+    }
+
+    return delivered;
+  }
+
+  /**
+   * 获取飞鸽传书列表（已收到的，按时间倒序）。
+   */
+  async getPigeonMessages(characterId: number): Promise<PigeonMessageInfo[]> {
+    const rows: any = await query(
+      `SELECT pm.id, pm.sender_id, pm.receiver_id, pm.content, pm.distance,
+              pm.has_traffic_channel, pm.calculated_delay, pm.sent_at, pm.delivered_at,
+              s.nickname AS sender_nickname
+       FROM pigeon_messages pm
+       LEFT JOIN characters s ON s.id = pm.sender_id
+       WHERE pm.receiver_id = ? AND pm.delivered_at IS NOT NULL
+       ORDER BY pm.delivered_at DESC LIMIT 100`,
+      [characterId]
+    );
+
+    return (rows as any[]).map((r) => ({
+      id: r.id,
+      senderId: r.sender_id,
+      receiverId: r.receiver_id,
+      senderNickname: r.sender_nickname ?? '未知',
+      content: r.content,
+      distance: r.distance,
+      hasTrafficChannel: Boolean(r.has_traffic_channel),
+      calculatedDelay: r.calculated_delay,
+      sentAt: new Date(r.sent_at).toISOString(),
+      deliveredAt: r.delivered_at ? new Date(r.delivered_at).toISOString() : null,
+    }));
+  }
+
+  /**
+   * 获取飞鸽传书隐私设置。
+   */
+  async getPigeonSettings(characterId: number): Promise<{ rejectStrangerPigeon: boolean }> {
+    const rows: any = await query(
+      'SELECT reject_stranger_pigeon FROM characters WHERE id = ?',
+      [characterId]
+    );
+    return { rejectStrangerPigeon: Boolean(rows[0]?.reject_stranger_pigeon) };
+  }
+
+  /**
+   * 更新飞鸽传书隐私设置。
+   */
+  async updatePigeonSettings(
+    characterId: number,
+    rejectStrangerPigeon: boolean
+  ): Promise<{ rejectStrangerPigeon: boolean }> {
+    await query(
+      'UPDATE characters SET reject_stranger_pigeon = ? WHERE id = ?',
+      [rejectStrangerPigeon, characterId]
+    );
+    return { rejectStrangerPigeon };
+  }
+
+  // ---- 飞鸽传书内部工具 ----
+
+  /**
+   * 计算两个区块之间的距离（切比雪夫距离，即八方向最大格数）。
+   * chunkId 格式为 "x_y"。
+   */
+  private calculateChunkDistance(chunkIdA: string, chunkIdB: string): number {
+    const [ax, ay] = chunkIdA.split('_').map(Number);
+    const [bx, by] = chunkIdB.split('_').map(Number);
+    const dx = Math.abs((ax ?? 0) - (bx ?? 0));
+    const dy = Math.abs((ay ?? 0) - (by ?? 0));
+    return Math.max(dx, dy);
+  }
+
+  /**
+   * 根据 GDD §2.7 计算飞鸽传书延迟（秒）。
+   * - 同区块/相邻区块（distance ≤ 1）= 0（即时）
+   * - 同大洲内跨区块（无交通渠道）= 5-15 分钟
+   * - 跨大洲（无交通渠道）= 15-30 分钟
+   * hasTrafficChannel 目前固定为 false（无传送门系统）。
+   */
+  private calculatePigeonDelay(
+    distance: number,
+    sameContinent: boolean
+  ): { delaySeconds: number; hasTrafficChannel: boolean } {
+    const hasTrafficChannel = false;
+
+    if (distance <= 1) {
+      return { delaySeconds: 0, hasTrafficChannel };
+    }
+
+    if (sameContinent) {
+      // 同大洲跨区块：5-15 分钟（取中间值 600 秒）
+      return { delaySeconds: 600, hasTrafficChannel };
+    }
+
+    // 跨大洲：15-30 分钟（取中间值 1350 秒）
+    return { delaySeconds: 1350, hasTrafficChannel };
   }
 
   // ==================== 内部工具 ====================
