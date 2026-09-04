@@ -88,6 +88,10 @@ export type GameEvents = {
   'friend:online-status': { characterId: number; isOnline: boolean }
   /** UI 请求查看某玩家信息卡（点击其他玩家） */
   'ui:show-player-info': { characterId: number; nickname: string }
+  /** 好友传送已确认（服务端返回新位置与区块） */
+  'friend:teleport-confirmed': { position: { x: number; y: number }; chunkId: string; friendNickname: string | null; cooldownRemaining: number }
+  /** UI 请求传送到好友位置 */
+  'ui:teleport-friend': { characterId: number }
 }
 
 export const EventBus = mitt<GameEvents>()

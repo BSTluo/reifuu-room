@@ -8,6 +8,7 @@ const friendStore = useFriendStore()
 
 const removing = ref<number | null>(null)
 const removingIds = ref(new Set<number>())
+const teleportingIds = ref(new Set<number>())
 
 const onlineCount = computed(() => friendStore.friends.filter((f) => f.isOnline).length)
 
@@ -30,6 +31,18 @@ async function removeFriend(friend: FriendDTO) {
   } finally {
     removingIds.value.delete(friend.characterId)
   }
+}
+
+function teleportToFriend(friend: FriendDTO) {
+  if (teleportingIds.value.has(friend.characterId)) return
+  if (!friend.isOnline) {
+    window.alert('好友不在线，无法传送')
+    return
+  }
+  teleportingIds.value.add(friend.characterId)
+  EventBus.emit('ui:teleport-friend', { characterId: friend.characterId })
+  // 防止重复点击；实际状态由 friend:teleport-confirmed / error 事件驱动
+  setTimeout(() => teleportingIds.value.delete(friend.characterId), 2000)
 }
 
 function onOnlineStatus(payload: { characterId: number; isOnline: boolean }) {
@@ -62,6 +75,14 @@ onBeforeUnmount(() => {
           </span>
         </div>
         <span class="since">{{ formatSince(friend.friendSince) }}</span>
+        <button
+          v-if="friend.isOnline"
+          class="teleport-btn"
+          :disabled="teleportingIds.has(friend.characterId)"
+          @click="teleportToFriend(friend)"
+        >
+          传送
+        </button>
         <button
           class="remove-btn"
           :disabled="removingIds.has(friend.characterId)"
@@ -152,6 +173,22 @@ onBeforeUnmount(() => {
   background: #4c3535;
 }
 .remove-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.teleport-btn {
+  padding: 4px 8px;
+  background: #2a3c5c;
+  color: #a0c0e0;
+  border: 1px solid #3a5c8c;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.teleport-btn:hover {
+  background: #355078;
+}
+.teleport-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

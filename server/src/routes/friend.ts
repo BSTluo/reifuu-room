@@ -43,6 +43,26 @@ router.delete('/:characterId', async (req: Request, res: Response, next: NextFun
   }
 });
 
+// ==================== 好友传送（GDD §2.7） ====================
+
+// POST /friend/teleport/:characterId
+router.post('/teleport/:characterId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const character = await requireCharacter(req);
+    const friendCharacterId = parseInt(String(req.params.characterId), 10);
+    if (!Number.isFinite(friendCharacterId)) throw new AppError('Invalid characterId', 400);
+
+    const result = await FriendService.teleportToFriend(
+      Number(character.id),
+      friendCharacterId
+    );
+
+    res.json({ status: 'success', data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ==================== 好友请求 ====================
 
 // POST /friend/request  body: { toCharacterId, message? }

@@ -252,6 +252,43 @@ export class MovementService {
 
     return position;
   }
+
+  /**
+   * Update a player's position after a teleport (bypasses MAX_MOVE_DISTANCE).
+   * Synchronously updates both the database and the Redis cache so the new
+   * position is immediately visible to other players in the target chunk.
+   * Also invalidates the character cache (`character:user:{userId}`) so
+   * /character/me returns the fresh position instead of a stale cached copy.
+   */
+  async updatePositionAfterTeleport(
+    characterId: string,
+    x: number,
+    y: number,
+    chunkId: string
+  ): Promise<void> {
+    // Update database synchronously (teleport must be durable)
+    await query(
+      'UPDATE characters SET grid_x = ?, grid_y = ?, current_chunk_id = ? WHERE id = ?',
+      [x, y, chunkId, characterId]
+    );
+
+    const position = await this.getPlayerPosition(characterId);
+    if (position) {
+      position.position = { x, y };
+      position.chunkId = chunkId;
+      position.timestamp = Date.now();
+      const cacheKey = prefixKey(`player:${characterId}:position`);
+      await redisClient.setEx(cacheKey, 300, JSON.stringify(position));
+
+      // Invalidate the character cache so /character/me reflects the new position
+      const characterCacheKey = `character:user:${position.userId}`;
+      try {
+        await redisClient.del(characterCacheKey);
+      } catch (error) {
+        logger.warn('Failed to invalidate character cache after teleport', error);
+      }
+    }
+  }
 }
 
 export default new MovementService();

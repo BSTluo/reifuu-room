@@ -170,6 +170,10 @@ function onFriendOnlineStatus(payload: { characterId: number; isOnline: boolean 
   friendStore.updateOnlineStatus(payload.characterId, payload.isOnline)
 }
 
+function onTeleportFriend(payload: { characterId: number }) {
+  socketClient.emit('friend:teleport', { toCharacterId: payload.characterId })
+}
+
 const toast = ref<{ text: string; type: string } | null>(null)
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -211,6 +215,7 @@ onMounted(() => {
   EventBus.on('friend:new-request', onFriendNewRequest)
   EventBus.on('friend:request-result', onFriendRequestResult)
   EventBus.on('friend:online-status', onFriendOnlineStatus)
+  EventBus.on('ui:teleport-friend', onTeleportFriend)
 
   // 迷雾 store 先在 socket 建立前监听，确保不遗漏 map:initial-explored / map:explore 事件
   explorationStore.startListening()
@@ -243,6 +248,7 @@ onBeforeUnmount(() => {
   EventBus.off('friend:new-request', onFriendNewRequest)
   EventBus.off('friend:request-result', onFriendRequestResult)
   EventBus.off('friend:online-status', onFriendOnlineStatus)
+  EventBus.off('ui:teleport-friend', onTeleportFriend)
   if (toastTimer) clearTimeout(toastTimer)
   explorationStore.stopListening()
   socketClient.disconnect()

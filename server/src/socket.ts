@@ -475,6 +475,80 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       }
     });
 
+    // ---- Friend teleport (GDD §2.7) ----
+    socket.on('friend:teleport', async (data: { toCharacterId: number }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const result = await FriendService.teleportToFriend(
+          Number(character.id),
+          Number(data?.toCharacterId)
+        );
+
+        const oldChunkId = character.chunkId;
+        const newChunkId = result.chunkId;
+        const chunkChanged = oldChunkId !== newChunkId;
+
+        if (chunkChanged) {
+          // Leave old chunk room and notify
+          socket.leave(oldChunkId);
+          socket.to(oldChunkId).emit('player:leave-chunk', {
+            characterId: character.id,
+          });
+
+          // Join new chunk room
+          socket.join(newChunkId);
+          character.chunkId = newChunkId;
+
+          logger.info(
+            `${character.nickname} teleported from chunk ${oldChunkId} to ${newChunkId}`
+          );
+
+          // Auto-explore new area
+          const newlyExplored = await ExplorationService.exploreArea(
+            character.id,
+            newChunkId,
+            1
+          );
+          if (newlyExplored.length > 0) {
+            socket.emit('map:explore', { chunks: newlyExplored });
+          }
+
+          // Get players in new chunk
+          const playersInNewChunk = await MovementService.getPlayersInChunk(newChunkId);
+          const otherPlayers = playersInNewChunk.filter(p => p.characterId !== character.id);
+
+          socket.emit('players:in-chunk', {
+            players: otherPlayers.map(p => ({
+              characterId: p.characterId,
+              nickname: p.nickname,
+              position: p.position,
+            })),
+          });
+
+          // Notify new chunk that this player entered
+          socket.to(newChunkId).emit('player:enter-chunk', {
+            characterId: character.id,
+            nickname: character.nickname,
+            position: result.position,
+          });
+        }
+
+        // Confirm to client
+        socket.emit('friend:teleport-confirmed', {
+          position: result.position,
+          chunkId: result.chunkId,
+          friendNickname: result.friendNickname,
+          cooldownRemaining: result.cooldownRemaining,
+        });
+      } catch (error: any) {
+        logger.error('Friend teleport error', error);
+        socket.emit('error', { message: error.message || 'Friend teleport failed' });
+      }
+    });
+
     // ---- Disconnect handler ----
     socket.on('disconnect', (reason) => {
       logger.info(`Client disconnected: ${user?.username} (${socket.id}), reason: ${reason}`);

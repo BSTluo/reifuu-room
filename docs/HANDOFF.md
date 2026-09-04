@@ -214,7 +214,7 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 
 ## 8. ⭐ 好友系统（GDD §2.7，✅ 前后端均已完成）
 
-**任务状态**：已完成。支持好友申请（附留言）、接受/拒绝、好友列表（在线状态）、删除好友、信箱（好友申请/系统消息）、未读数。端到端 E2E 测试 37/37 通过（2026-09-04）。
+**任务状态**：已完成。支持好友申请（附留言）、接受/拒绝、好友列表（在线状态）、删除好友、信箱（好友申请/系统消息）、未读数、**好友传送**（5 分钟冷却）。端到端 E2E 测试：好友核心 37/37 + 好友传送 25/25 全通过（2026-09-04）。
 
 ### 8.1 数据库
 - **迁移脚本 `server/add_friend_system.sql`**（已执行）：3 张新表，`schema.sql` 同步更新：
@@ -233,10 +233,10 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 - **REST `server/src/routes/friend.ts`**（挂载于 `/friend`，全部需 authenticate + requireCharacter）：
   - `GET /friend/list`、`DELETE /friend/:characterId`、`POST /friend/request`、`POST /friend/request/:requestId/respond`、`GET /friend/requests/pending`、`GET /friend/mailbox`、`POST /friend/mailbox/:messageId/read`、`GET /friend/mailbox/unread-count`。
 - **Socket（`server/src/socket.ts`）**：
-  - 新增 `friend:send-request` / `friend:respond` 事件（同步注册在异步 setup 之前，避免 handler 注册竞态——同 §10.2 教训）。
+  - 新增 `friend:send-request` / `friend:respond` / `friend:teleport` 事件（同步注册在异步 setup 之前，避免 handler 注册竞态——同 §10.2 教训）。
   - 每个连接加入房间 `character:{characterId}` → 按角色精确推送。
   - 连接时 `setCharacterOnline` + 通知在线好友 `friend:online-status`；断开时 `setCharacterOffline` + 通知。
-  - 客户端事件：`friend:new-request`、`friend:request-result`、`friend:responded`、`friend:online-status`。
+  - 客户端事件：`friend:new-request`、`friend:request-result`、`friend:responded`、`friend:online-status`、`friend:teleport-confirmed`。
 
 ### 8.3 前端
 - **类型/Store**：`api/types.ts` 新增 `FriendDTO`/`FriendRequestDTO`/`MailboxMessageDTO`；`http.ts` 新增 `apiDelete`；`stores/friend.ts` Pinia store 封装全部 friend API + 在线状态更新。
@@ -246,12 +246,16 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
   - `PlayerInfoCard.vue`：点击其他玩家弹出的信息卡（昵称 + 「加好友」带可选留言）。
 - **交互入口**：`OtherPlayerSprite` 设为可点击（`setInteractive` + pointerdown → `ui:show-player-info` 事件携带 characterId/nickname）；`GameView.vue` HUD 加「好友」/「信箱」按钮（信箱带未读红点角标）。
 
-### 8.4 验证方式
-- E2E 测试（临时脚本已清理）：37 项断言全通过 —— 申请/重复申请(409)/反向申请(409)/自加(400)/pending 列表/信箱含申请消息/非收件人响应(403)/接受建好友/双向列表/重复响应(409)/接受系统消息/已是好友再申请(409)/标记已读/未读归零/删除好友/删非好友(404)/拒绝流程/重新申请/Redis 在线 Set 格式。
-- 服务端 `tsc --noEmit` + 前端 `vue-tsc --noEmit` 均通过。
+### 8.4 好友传送（GDD §2.7 好友传送，✅ 已完成）
+- **服务 `FriendService.teleportToFriend(characterId, friendCharacterId)`** 校验链：好友关系(404) → 好友在线(400，Redis Set `online:characters`) → 冷却(429，Redis key `teleport:cooldown:{characterId}` TTL 300s)。通过后：`MovementService.getPlayerPosition` 取好友位置 → 随机偏移 1-2 格落点（角度随机、避免完全重叠）→ `getChunkId` 算目标区块 → `updatePositionAfterTeleport` 同步写 DB+Redis → `ExplorationService.exploreArea(cid, chunk, 1)` 自动探索 → 写冷却 key。返回 `{ position, chunkId, friendNickname, cooldownRemaining }`。
+- **`MovementService.updatePositionAfterTeleport`**（新增方法）：绕过 `MAX_MOVE_DISTANCE=10` 校验（普通移动路径不适用），**同步**更新 `characters` 表 + `player:{id}:position` Redis 缓存 + **失效 `character:user:{userId}` 角色缓存**（否则 `/character/me` 返回旧位置 5 分钟——缓存自延续陷阱，同 §10.2.4）。
+- **REST**：`POST /friend/teleport/:characterId`。
+- **Socket**：`friend:teleport` handler 在服务层校验通过后处理区块切换（leave 旧区块 room + `player:leave-chunk`、join 新区块 + `player:enter-chunk`、探索迷雾 `map:explore`、下发 `players:in-chunk`），最后 `friend:teleport-confirmed` 确认。
+- **前端**：`FriendListPanel.vue` 在线好友显示「传送」按钮 → `ui:teleport-friend` 事件 → `GameView` 转发 socket `friend:teleport` → `WorldScene.onTeleportConfirmed` 更新玩家精灵位置/区块/迷雾 + `game:toast` 提示。
+- **验证**：E2E 25/25 通过 —— 非好友(404)/好友离线(400)/建好友/传送成功(位置+chunk+好友昵称+cooldown)/DB 位置更新/冷却期 429/socket 传送冷却报错/清冷却后 socket 传送成功/落点不重叠且距离≤2.83/冷却 key TTL=300。
 
 ### 8.5 未实现（后续 Phase 3）
-- 好友传送（5-10 分钟冷却，需 MovementService 集成）、飞鸽传书（跨区块/离线留言，按距离延迟送达）、隐身模式、拉黑（Phase 5）。
+- 飞鸽传书（跨区块/离线留言，按距离延迟送达）、隐身模式、拉黑（Phase 5）、好友私聊频道。
 
 ---
 

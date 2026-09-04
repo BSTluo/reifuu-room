@@ -2,9 +2,14 @@ import { query } from '../db/mysql.js';
 import { getRedis, prefixKey } from '../db/redis.js';
 import logger from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
+import MovementService from './MovementService.js';
+import ExplorationService from './ExplorationService.js';
 
 /** 好友上限（GDD §2.7 好友列表功能） */
 export const FRIEND_LIMIT = 50;
+
+/** 好友传送冷却时间（GDD §2.7：5-10 分钟，取 5 分钟） */
+export const TELEPORT_COOLDOWN_SECONDS = 300;
 
 export interface FriendInfo {
   characterId: number;
@@ -287,6 +292,87 @@ export class FriendService {
       [id1, id2]
     );
     return Array.isArray(rows) && rows.length > 0;
+  }
+
+  // ==================== 好友传送（GDD §2.7） ====================
+
+  /**
+   * 传送到好友位置
+   * 校验：好友关系、好友在线、冷却时间（5 分钟）
+   * 落地后随机落在好友附近 1-2 格（避免完全重叠），并自动探索周边
+   */
+  async teleportToFriend(
+    characterId: number,
+    friendCharacterId: number
+  ): Promise<{
+    position: { x: number; y: number };
+    chunkId: string;
+    friendNickname: string | null;
+    cooldownRemaining: number;
+  }> {
+    // 校验好友关系
+    if (!(await this.isFriend(characterId, friendCharacterId))) {
+      throw new AppError('你们不是好友，无法传送', 404);
+    }
+
+    // 校验好友在线
+    const onlineMap = await this.getOnlineStatus([friendCharacterId]);
+    if (!onlineMap.get(friendCharacterId)) {
+      throw new AppError('好友不在线，无法传送', 400);
+    }
+
+    // 校验冷却
+    const redis = await getRedis();
+    const cooldownKey = prefixKey(`teleport:cooldown:${characterId}`);
+    const remaining = await redis.ttl(cooldownKey);
+    if (remaining > 0) {
+      throw new AppError(
+        `传送冷却中，请 ${Math.ceil(remaining / 60)} 分钟后再试`,
+        429
+      );
+    }
+
+    // 获取好友位置
+    const friendPos = await MovementService.getPlayerPosition(String(friendCharacterId));
+    if (!friendPos) {
+      throw new AppError('无法获取好友位置', 400);
+    }
+
+    // 计算传送落点：好友附近随机偏移 1-2 格（避免完全重叠）
+    const offset = () => {
+      const magnitude = 1 + Math.floor(Math.random() * 2); // 1 或 2
+      const angle = Math.random() * Math.PI * 2;
+      return {
+        dx: Math.round(Math.cos(angle) * magnitude),
+        dy: Math.round(Math.sin(angle) * magnitude),
+      };
+    };
+
+    const targetX = friendPos.position.x + offset().dx;
+    const targetY = friendPos.position.y + offset().dy;
+
+    // 计算目标 chunk（沿用 32x32 网格规则）
+    const targetChunkId = MovementService.getChunkId(targetX, targetY);
+
+    // 落地后写入位置：DB + Redis 缓存
+    await MovementService.updatePositionAfterTeleport(String(characterId), targetX, targetY, targetChunkId);
+
+    // 自动探索落点周边（探索半径与 GDD §3.2 一致，取 1）
+    await ExplorationService.exploreArea(String(characterId), targetChunkId, 1);
+
+    // 写入冷却（5 分钟）
+    await redis.setEx(cooldownKey, TELEPORT_COOLDOWN_SECONDS, String(Date.now()));
+
+    logger.info(
+      `Friend teleport: character ${characterId} -> friend ${friendCharacterId} at (${targetX}, ${targetY}) chunk ${targetChunkId}`
+    );
+
+    return {
+      position: { x: targetX, y: targetY },
+      chunkId: targetChunkId,
+      friendNickname: friendPos.nickname,
+      cooldownRemaining: TELEPORT_COOLDOWN_SECONDS,
+    };
   }
 
   // ==================== 信箱 ====================

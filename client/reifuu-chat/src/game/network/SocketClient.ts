@@ -32,6 +32,7 @@ export interface ServerToClientEvents {
   'friend:request-result': (data: { requestId: number; status: 'accepted' | 'rejected'; responderCharacterId: number }) => void
   'friend:responded': (data: { result: { status: 'accepted' | 'rejected'; fromCharacterId: number; toCharacterId: number } }) => void
   'friend:online-status': (data: { characterId: number; isOnline: boolean }) => void
+  'friend:teleport-confirmed': (data: { position: { x: number; y: number }; chunkId: string; friendNickname: string | null; cooldownRemaining: number }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -50,6 +51,7 @@ export interface ClientToServerEvents {
   // Friend events (client -> server)
   'friend:send-request': (data: { toCharacterId: number; message?: string }) => void
   'friend:respond': (data: { requestId: number; accept: boolean }) => void
+  'friend:teleport': (data: { toCharacterId: number }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -151,6 +153,9 @@ class SocketClient {
     })
     this.socket.on('friend:online-status', (data: { characterId: number; isOnline: boolean }) => {
       EventBus.emit('friend:online-status', data)
+    })
+    this.socket.on('friend:teleport-confirmed', (data: { position: { x: number; y: number }; chunkId: string; friendNickname: string | null; cooldownRemaining: number }) => {
+      EventBus.emit('friend:teleport-confirmed', data)
     })
 
     this.socket.on('disconnect', (reason) => {

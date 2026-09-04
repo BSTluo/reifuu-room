@@ -102,6 +102,7 @@ export class WorldScene extends Phaser.Scene {
 
     EventBus.on('ui:move-player', this.onUIMovePlayer)
     EventBus.on('ui:spawn-character', this.onUISpawnCharacter)
+    EventBus.on('friend:teleport-confirmed', this.onTeleportConfirmed)
     EventBus.on('exploration:updated', this.onExplorationUpdated)
     EventBus.on('resource:collected', this.onResourceCollected)
     EventBus.on('resource:node-depleted', this.onResourceNodeDepleted)
@@ -160,6 +161,7 @@ export class WorldScene extends Phaser.Scene {
     this.input.off('pointerdown', this.onPointerDown, this)
     EventBus.off('ui:move-player', this.onUIMovePlayer)
     EventBus.off('ui:spawn-character', this.onUISpawnCharacter)
+    EventBus.off('friend:teleport-confirmed', this.onTeleportConfirmed)
     EventBus.off('exploration:updated', this.onExplorationUpdated)
     EventBus.off('socket:connected', this.onSocketConnected)
     EventBus.off('resource:collected', this.onResourceCollected)
@@ -416,6 +418,35 @@ export class WorldScene extends Phaser.Scene {
     this.player.moveTo(x, y)
     this.clearPath()
     this.refreshFog()
+  }
+
+  /** 好友传送确认：更新玩家位置、区块、迷雾与资源/房间 */
+  private onTeleportConfirmed = (data: {
+    position: { x: number; y: number }
+    chunkId: string
+    friendNickname: string | null
+    cooldownRemaining: number
+  }) => {
+    const characterStore = useCharacterStore()
+    characterStore.setPosition(data.position.x, data.position.y)
+
+    // 更新玩家精灵位置
+    const { x, y } = gridToIso(data.position.x, data.position.y)
+    this.player.setPosition(x, y)
+    this.player.moveTo(x, y)
+    this.clearPath()
+
+    // 区块变化：更新 currentChunkId、触发资源/房间加载、刷新迷雾
+    if (data.chunkId !== this.currentChunkId) {
+      this.currentChunkId = data.chunkId
+      EventBus.emit('player:chunk-changed', { chunkId: data.chunkId })
+      this.refreshFog()
+    }
+
+    EventBus.emit('game:toast', {
+      message: data.friendNickname ? `已传送到 ${data.friendNickname} 附近` : '传送成功',
+      type: 'success',
+    })
   }
 
   private onExplorationUpdated = () => {
