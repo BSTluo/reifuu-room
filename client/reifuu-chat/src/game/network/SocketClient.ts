@@ -11,12 +11,36 @@ export interface ServerToClientEvents {
   'map:chunk-data': (data: { chunkId: string; tiles: string[][] }) => void
   'map:initial-explored': (data: { chunks: string[] }) => void
   'map:explore': (data: { chunks: string[] }) => void
+  'resource:collected': (data: {
+    nodeId: number
+    resourceType: string
+    inventory: { itemType: string; quantity: number }[]
+  }) => void
+  'resource:node-depleted': (data: { nodeId: number }) => void
+  'resource:node-respawned': (data: { nodeId: number }) => void
+  'room:history': (data: { roomId: string; messages: Array<{ id: number; roomId: string; characterId: string; nickname: string; content: string; createdAt: string }> }) => void
+  'room:message': (data: { roomId: string; message: { id: number; roomId: string; characterId: string; nickname: string; content: string; createdAt: string } }) => void
+  'room:members': (data: { roomId: string; members: Array<{ characterId: string; nickname: string }> }) => void
+  // Plugin events (server -> client)
+  'plugin:activated': (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => void
+  'plugin:deactivated': (data: { roomId: string; pluginId: string }) => void
+  'plugin:state': (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => void
+  'plugin:list': (data: { roomId: string; plugins: Array<{ pluginId: string; state: Record<string, unknown> }> }) => void
   [event: string]: (...args: any[]) => void
 }
 
 export interface ClientToServerEvents {
   echo: (payload: unknown) => void
   'player:move': (data: { x: number; y: number }) => void
+  'client:request-chunk-players': () => void
+  'resource:collect': (data: { nodeId: number; x: number; y: number }) => void
+  'room:join': (data: { roomId: string }) => void
+  'room:leave': (data: { roomId: string }) => void
+  'room:message': (data: { roomId: string; content: string }) => void
+  // Plugin events (client -> server)
+  'plugin:activate': (data: { roomId: string; pluginId: string }) => void
+  'plugin:deactivate': (data: { roomId: string; pluginId: string }) => void
+  'plugin:state-sync': (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -60,6 +84,47 @@ class SocketClient {
     })
     this.socket.on('map:explore', (data: { chunks: string[] }) => {
       EventBus.emit('map:explore', data)
+    })
+
+    // 资源/背包：服务端确认采集 → EventBus 通知场景与 UI
+    this.socket.on(
+      'resource:collected',
+      (data: {
+        nodeId: number
+        resourceType: string
+        inventory: { itemType: string; quantity: number }[]
+      }) => {
+        EventBus.emit('resource:collected', data)
+        EventBus.emit('inventory:updated', { items: data.inventory })
+      }
+    )
+    this.socket.on('resource:node-depleted', (data: { nodeId: number }) => {
+      EventBus.emit('resource:node-depleted', data)
+    })
+
+    // Chat room: history, incoming message, member list updates
+    this.socket.on('room:history', (data: { roomId: string; messages: any[] }) => {
+      EventBus.emit('room:history', data)
+    })
+    this.socket.on('room:message', (data: { roomId: string; message: any }) => {
+      EventBus.emit('room:message', data)
+    })
+    this.socket.on('room:members', (data: { roomId: string; members: Array<{ characterId: string; nickname: string }> }) => {
+      EventBus.emit('room:members', data)
+    })
+
+    // Plugin events: activated, deactivated, state sync, plugin list
+    this.socket.on('plugin:activated', (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => {
+      EventBus.emit('plugin:activated', data)
+    })
+    this.socket.on('plugin:deactivated', (data: { roomId: string; pluginId: string }) => {
+      EventBus.emit('plugin:deactivated', data)
+    })
+    this.socket.on('plugin:state', (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => {
+      EventBus.emit('plugin:state', data)
+    })
+    this.socket.on('plugin:list', (data: { roomId: string; plugins: Array<{ pluginId: string; state: Record<string, unknown> }> }) => {
+      EventBus.emit('plugin:list', data)
     })
 
     this.socket.on('disconnect', (reason) => {

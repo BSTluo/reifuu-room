@@ -10,6 +10,8 @@ export type GameEvents = {
   'phaser:ready': { sceneKey: string }
   'phaser:scene-changed': { sceneKey: string }
   'player:position-changed': { x: number; y: number }
+  /** 游戏内轻提示（采集距离不足等） */
+  'game:toast': { message: string; type?: 'info' | 'warn' | 'error' | 'success' }
 
   // Vue -> Phaser
   'ui:request-scene': { sceneKey: string }
@@ -32,6 +34,46 @@ export type GameEvents = {
   'exploration:updated': { chunks: string[] }
   /** 玩家所在区块变化（跨越区块边界） */
   'player:chunk-changed': { chunkId: string }
+
+  // Resource / inventory / build
+  /** 资源采集成功（服务端确认），携带最新背包 */
+  'resource:collected': {
+    nodeId: number
+    resourceType: string
+    inventory: { itemType: string; quantity: number }[]
+  }
+  /** 同区块其他玩家采集了资源节点 → 前端标记为已耗尽 */
+  'resource:node-depleted': { nodeId: number }
+  /** 背包已更新（采集/建造后） */
+  'inventory:updated': { items: { itemType: string; quantity: number }[] }
+  /** 建造完成 → 场景可显示聊天室标记 */
+  'build:created': { chunkId: string; chatRoomId: number }
+
+  // Chat room
+  /** 服务端下发房间历史消息 */
+  'room:history': { roomId: string; messages: Array<{ id: number; roomId: string; characterId: string; nickname: string; content: string; createdAt: string }> }
+  /** 房间内新消息广播 */
+  'room:message': { roomId: string; message: { id: number; roomId: string; characterId: string; nickname: string; content: string; createdAt: string } }
+  /** 房间成员列表更新 */
+  'room:members': { roomId: string; members: Array<{ characterId: string; nickname: string }> }
+  /** UI 请求进入聊天室 */
+  'ui:enter-room': { roomId: string }
+  /** UI 请求离开聊天室 */
+  'ui:leave-room': { roomId: string }
+  /** 已进入聊天室（场景/UI 可据此切换状态） */
+  'room:entered': { roomId: string; name: string }
+  /** 已离开聊天室 */
+  'room:left': { roomId: string }
+
+  // Plugin events
+  /** 插件已激活（房间内广播） */
+  'plugin:activated': { roomId: string; pluginId: string; state: Record<string, unknown> }
+  /** 插件已停用（房间内广播） */
+  'plugin:deactivated': { roomId: string; pluginId: string }
+  /** 插件状态更新（来自服务端广播，非本客户端触发） */
+  'plugin:state': { roomId: string; pluginId: string; state: Record<string, unknown> }
+  /** 加入房间时服务端下发当前已激活插件列表 */
+  'plugin:list': { roomId: string; plugins: Array<{ pluginId: string; state: Record<string, unknown> }> }
 }
 
 export const EventBus = mitt<GameEvents>()

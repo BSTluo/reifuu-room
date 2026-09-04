@@ -6,6 +6,12 @@ import config from './config.js';
 import CharacterService from './services/CharacterService.js';
 import MovementService from './services/MovementService.js';
 import ExplorationService from './services/ExplorationService.js';
+import ResourceService from './services/ResourceService.js';
+import InventoryService from './services/InventoryService.js';
+import ChatMessageService from './services/ChatMessageService.js';
+import PluginService from './services/PluginService.js';
+import BuildService from './services/BuildService.js';
+import { query } from './db/mysql.js';
 
 interface SocketData {
   user: {
@@ -17,6 +23,26 @@ interface SocketData {
     nickname: string;
     chunkId: string;
   };
+  currentRoomId?: string;
+  cacheRefreshTimer?: NodeJS.Timeout;
+}
+
+/**
+ * Collect the current member list of a Socket.io room from connected sockets.
+ */
+async function getRoomMembers(
+  io: SocketIOServer,
+  roomKey: string
+): Promise<Array<{ characterId: string; nickname: string }>> {
+  const sockets = await io.in(roomKey).fetchSockets();
+  const members: Array<{ characterId: string; nickname: string }> = [];
+  for (const s of sockets) {
+    const data = s.data as SocketData;
+    if (data.character) {
+      members.push({ characterId: data.character.id, nickname: data.character.nickname });
+    }
+  }
+  return members;
 }
 
 export const initializeSocketIO = (httpServer: HTTPServer) => {
@@ -191,12 +217,200 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       socket.emit('echo', data);
     });
 
-    // Disconnect handler
+    // Collect a resource node in real-time and broadcast the depletion/refresh
+    // so other players in the same chunk see the node update immediately.
+    socket.on('resource:collect', async (data: { nodeId: number; x: number; y: number }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+
+      try {
+        const result = await ResourceService.collectResource(
+          data.nodeId,
+          character.id,
+          { x: data.x, y: data.y }
+        );
+
+        if (!result.success) {
+          socket.emit('error', { message: result.message ?? 'Collection failed' });
+          return;
+        }
+
+        const inventory = await InventoryService.getInventory(character.id);
+
+        // Acknowledge to the collector with updated inventory
+        socket.emit('resource:collected', {
+          nodeId: data.nodeId,
+          resourceType: result.resourceType,
+          inventory,
+        });
+
+        // Notify everyone else in the chunk that this node was collected
+        socket.to(character.chunkId).emit('resource:node-depleted', {
+          nodeId: data.nodeId,
+        });
+      } catch (error: any) {
+        logger.error('Resource collect error', error);
+        socket.emit('error', { message: error.message || 'Collection failed' });
+      }
+    });
+
+    // ---- Chat room events ----
+    // Join a chat room (Socket.io room named `room:<id>`). Broadcasts the
+    // member list to everyone in the room and sends history to the joiner.
+    socket.on('room:join', async (data: { roomId: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      const roomId = String(data?.roomId ?? '');
+      if (!/^\d+$/.test(roomId)) {
+        socket.emit('error', { message: 'Invalid roomId' });
+        return;
+      }
+
+      try {
+        // Verify the room exists
+        const rooms = await BuildService.getRoomsInChunk(character.chunkId);
+        const room = rooms.find((r) => String(r.id) === roomId);
+        if (!room) {
+          // Room may be in another chunk; still allow joining by id if it exists.
+          const anyRoom: any = await query('SELECT id FROM chat_rooms WHERE id = ?', [roomId]);
+          if (anyRoom.length === 0) {
+            socket.emit('error', { message: 'Chat room not found' });
+            return;
+          }
+        }
+
+        const roomKey = `room:${roomId}`;
+        socket.join(roomKey);
+        socket.data.currentRoomId = roomId;
+
+        // Send history to the joiner
+        const history = await ChatMessageService.getHistory(roomId);
+        socket.emit('room:history', { roomId, messages: history });
+
+        // Notify everyone (including joiner) of the updated member list
+        const members = await getRoomMembers(io, roomKey);
+        io.to(roomKey).emit('room:members', { roomId, members });
+
+        // Send active plugins to the joiner
+        const activePlugins = PluginService.listActive(roomId);
+        if (activePlugins.length > 0) {
+          socket.emit('plugin:list', { roomId, plugins: activePlugins });
+        }
+
+        logger.info(`${character.nickname} joined chat room ${roomId}`);
+      } catch (error: any) {
+        logger.error('Room join error', error);
+        socket.emit('error', { message: error.message || 'Failed to join room' });
+      }
+    });
+
+    // Leave a chat room
+    socket.on('room:leave', (data: { roomId: string }) => {
+      const roomId = String(data?.roomId ?? '');
+      if (!/^\d+$/.test(roomId)) return;
+      const roomKey = `room:${roomId}`;
+      socket.leave(roomKey);
+      socket.data.currentRoomId = undefined;
+      logger.info(`${character?.nickname ?? 'unknown'} left chat room ${roomId}`);
+    });
+
+    // Send a chat message to a room (persist + broadcast)
+    socket.on('room:message', async (data: { roomId: string; content: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      const roomId = String(data?.roomId ?? '');
+      const content = String(data?.content ?? '');
+      if (!/^\d+$/.test(roomId)) {
+        socket.emit('error', { message: 'Invalid roomId' });
+        return;
+      }
+
+      try {
+        const message = await ChatMessageService.sendMessage(roomId, character.id, content);
+        io.to(`room:${roomId}`).emit('room:message', { roomId, message });
+      } catch (error: any) {
+        logger.error('Room message error', error);
+        socket.emit('error', { message: error.message || 'Failed to send message' });
+      }
+    });
+
+    // ---- Plugin events ----
+    // Activate a plugin in a room
+    socket.on('plugin:activate', (data: { roomId: string; pluginId: string }) => {
+      if (!character) return;
+      const roomId = String(data?.roomId ?? '');
+      const pluginId = String(data?.pluginId ?? '');
+      if (!/^\d+$/.test(roomId) || !pluginId) return;
+
+      const allowedPlugins = ['music-sync', 'video-sync'];
+      if (!allowedPlugins.includes(pluginId)) {
+        socket.emit('error', { message: `Unknown plugin: ${pluginId}` });
+        return;
+      }
+
+      // Must be in the room to activate plugins
+      if ((socket.data as SocketData).currentRoomId !== roomId) {
+        socket.emit('error', { message: 'Must be in the room to activate plugins' });
+        return;
+      }
+
+      const state = PluginService.activate(roomId, pluginId, character.id, {
+        controllerId: character.id,
+      });
+
+      // Broadcast to everyone in the room that a plugin was activated
+      const roomKey = `room:${roomId}`;
+      io.to(roomKey).emit('plugin:activated', { roomId, pluginId, state });
+      logger.info(`Plugin "${pluginId}" activated by ${character.nickname} in room ${roomId}`);
+    });
+
+    // Deactivate a plugin in a room
+    socket.on('plugin:deactivate', (data: { roomId: string; pluginId: string }) => {
+      if (!character) return;
+      const roomId = String(data?.roomId ?? '');
+      const pluginId = String(data?.pluginId ?? '');
+      if (!/^\d+$/.test(roomId) || !pluginId) return;
+
+      const existed = PluginService.deactivate(roomId, pluginId);
+      if (existed) {
+        const roomKey = `room:${roomId}`;
+        io.to(roomKey).emit('plugin:deactivated', { roomId, pluginId });
+        logger.info(`Plugin "${pluginId}" deactivated in room ${roomId}`);
+      }
+    });
+
+    // Sync plugin state (controller sends state update, server broadcasts)
+    socket.on('plugin:state-sync', (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => {
+      if (!character) return;
+      const roomId = String(data?.roomId ?? '');
+      const pluginId = String(data?.pluginId ?? '');
+      if (!/^\d+$/.test(roomId) || !pluginId || !data?.state) return;
+
+      // Only the controller (activator) or room owner can send state updates
+      const current = PluginService.getState(roomId, pluginId);
+      if (!current) return; // plugin not active
+      // Allow controller or any room member to update (MVP: trust all members)
+
+      const updatedState = PluginService.updateState(roomId, pluginId, data.state);
+      if (updatedState) {
+        const roomKey = `room:${roomId}`;
+        // Broadcast to everyone EXCEPT the sender (they already applied locally)
+        socket.to(roomKey).emit('plugin:state', { roomId, pluginId, state: updatedState });
+      }
+    });
+
+    // ---- Disconnect handler ----
     socket.on('disconnect', (reason) => {
       logger.info(`Client disconnected: ${user?.username} (${socket.id}), reason: ${reason}`);
 
       // Stop the Redis position-cache refresher for this socket
-      const timer = (socket.data as SocketData & { cacheRefreshTimer?: NodeJS.Timeout }).cacheRefreshTimer;
+      const timer = (socket.data as SocketData).cacheRefreshTimer;
       if (timer) clearInterval(timer);
 
       // Notify chunk that player left
@@ -204,6 +418,15 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
         socket.to(character.chunkId).emit('player:leave-chunk', {
           characterId: character.id,
         });
+
+        // If the player was inside a chat room, refresh that room's member list
+        const roomId = (socket.data as SocketData).currentRoomId;
+        if (roomId) {
+          const roomKey = `room:${roomId}`;
+          getRoomMembers(io, roomKey)
+            .then((members) => io.to(roomKey).emit('room:members', { roomId, members }))
+            .catch((err) => logger.error('Failed to update room members on disconnect', err));
+        }
       }
     });
 

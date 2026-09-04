@@ -8,6 +8,9 @@ import { CHUNK_SIZE, getChunkTerrain, chunkIdToWorldOrigin, worldToChunkId } fro
 import { useCharacterStore } from '../../stores/character'
 import { useExplorationStore } from '../../stores/exploration'
 import type { ChunkFogState } from '../../stores/exploration'
+import { apiGet } from '../../api/http'
+import { useUserStore } from '../../stores/user'
+import type { ResourceNodeDTO, ChatRoomDTO } from '../../api/types'
 
 /** 地形 Blitter 层深度：低于一切实体与迷雾层 */
 const TERRAIN_DEPTH = -10000
@@ -49,6 +52,14 @@ export class WorldScene extends Phaser.Scene {
   private syncHandlersRegistered = false
   /** chunkId -> 该区块的地形 Blitter 层与迷雾遮罩 */
   private chunkLayers = new Map<string, ChunkLayer>()
+  /** nodeId -> 资源节点精灵（当前区块） */
+  private resourceSprites = new Map<number, Phaser.GameObjects.Image>()
+  /** nodeId -> 资源节点数据（当前区块） */
+  private resourceNodeData = new Map<number, ResourceNodeDTO>()
+  /** roomId -> 聊天室房屋精灵（当前区块） */
+  private roomSprites = new Map<string, Phaser.GameObjects.Image>()
+  /** roomId -> 聊天室数据（当前区块） */
+  private roomData = new Map<string, ChatRoomDTO>()
 
   constructor() {
     super('WorldScene')
@@ -92,6 +103,11 @@ export class WorldScene extends Phaser.Scene {
     EventBus.on('ui:move-player', this.onUIMovePlayer)
     EventBus.on('ui:spawn-character', this.onUISpawnCharacter)
     EventBus.on('exploration:updated', this.onExplorationUpdated)
+    EventBus.on('resource:collected', this.onResourceCollected)
+    EventBus.on('resource:node-depleted', this.onResourceNodeDepleted)
+    EventBus.on('player:chunk-changed', this.onPlayerChunkChangedForResources)
+    EventBus.on('player:chunk-changed', this.onPlayerChunkChangedForRooms)
+    EventBus.on('build:created', this.onBuildCreated)
 
     // 若 socket 尚未推送初始已探索列表（如重连复用旧 socket），通过 REST 兜底拉取
     if (!explorationStore.initialized) {
@@ -100,6 +116,12 @@ export class WorldScene extends Phaser.Scene {
 
     // 初始渲染：store 中已有数据则立即绘制，否则等待 exploration:updated 触发
     this.refreshFog()
+
+    // 加载当前区块的资源节点
+    this.loadChunkResources(this.currentChunkId)
+
+    // 加载当前区块的聊天室房屋标记
+    this.loadChunkRooms(this.currentChunkId)
 
     EventBus.emit('phaser:ready', { sceneKey: this.scene.key })
     EventBus.emit('phaser:scene-changed', { sceneKey: this.scene.key })
@@ -140,7 +162,14 @@ export class WorldScene extends Phaser.Scene {
     EventBus.off('ui:spawn-character', this.onUISpawnCharacter)
     EventBus.off('exploration:updated', this.onExplorationUpdated)
     EventBus.off('socket:connected', this.onSocketConnected)
+    EventBus.off('resource:collected', this.onResourceCollected)
+    EventBus.off('resource:node-depleted', this.onResourceNodeDepleted)
+    EventBus.off('player:chunk-changed', this.onPlayerChunkChangedForResources)
+    EventBus.off('player:chunk-changed', this.onPlayerChunkChangedForRooms)
+    EventBus.off('build:created', this.onBuildCreated)
     this.cleanupMultiplayerSync()
+    this.clearResourceSprites()
+    this.clearRoomSprites()
     this.destroyAllChunks()
   }
 
@@ -493,5 +522,159 @@ export class WorldScene extends Phaser.Scene {
     if (socket) {
       socket.emit('player:move', { x: gx, y: gy })
     }
+  }
+
+  // ==================== 聊天室房屋 ====================
+
+  /** 玩家进入新区块时加载该区块的聊天室房屋 */
+  private onPlayerChunkChangedForRooms = (payload: { chunkId: string }) => {
+    this.loadChunkRooms(payload.chunkId)
+  }
+
+  /** 建造完成：立即刷新当前区块房屋标记 */
+  private onBuildCreated = (payload: { chunkId: string; chatRoomId: number }) => {
+    if (payload.chunkId === this.currentChunkId) {
+      this.loadChunkRooms(payload.chunkId)
+    }
+  }
+
+  /** 从 REST API 加载指定区块的聊天室列表并渲染房屋标记（需携带认证 token） */
+  private async loadChunkRooms(chunkId: string | null): Promise<void> {
+    if (!chunkId) return
+    const userStore = useUserStore()
+    const token = userStore.accessToken ?? undefined
+    this.clearRoomSprites()
+    try {
+      const data = await apiGet<{ chunkId: string; rooms: Array<{ id: number; chunkId: string; name: string; template: string; ownerId: string }> }>(
+        `/map/rooms-in-chunk/${chunkId}`,
+        token,
+      )
+      if (data.rooms) {
+        for (const room of data.rooms) {
+          this.renderRoomMarker({
+            id: String(room.id),
+            chunkId: room.chunkId,
+            name: room.name,
+            template: room.template,
+            ownerId: room.ownerId,
+          })
+        }
+      }
+    } catch (err) {
+      // 静默失败：区块可能没有聊天室，或网络错误
+      console.warn('loadChunkRooms failed:', err)
+    }
+  }
+
+  /** 渲染单个聊天室房屋精灵（可点击进入） */
+  private renderRoomMarker(room: ChatRoomDTO): void {
+    const { wx: originWX, wy: originWY } = chunkIdToWorldOrigin(room.chunkId)
+    // 房屋摆在区块中央（CHUNK_SIZE=16 → 中心 7,7；偏 -1 靠左上以不遮挡资源）
+    const cx = originWX + 7
+    const cy = originWY + 7
+    const { x, y } = gridToIso(cx, cy)
+    const textureKey = `house-${room.template}`
+    const sprite = this.add.image(x, y - 16, textureKey)
+    sprite.setDepth(y + 2)
+    sprite.setInteractive({ useHandCursor: true })
+    sprite.on('pointerdown', () => this.onRoomMarkerClick(room))
+    this.roomSprites.set(room.id, sprite)
+    this.roomData.set(room.id, room)
+  }
+
+  /** 点击聊天室房屋：提示 UI 层进入房间（GameView 监听后打开 ChatPanel） */
+  private onRoomMarkerClick(room: ChatRoomDTO): void {
+    EventBus.emit('ui:enter-room', { roomId: room.id })
+  }
+
+  /** 清除当前所有聊天室房屋精灵 */
+  private clearRoomSprites(): void {
+    this.roomSprites.forEach((sprite) => sprite.destroy())
+    this.roomSprites.clear()
+    this.roomData.clear()
+  }
+
+  // ==================== 资源节点 ====================
+
+  /** 玩家进入新区块时加载该区块的资源节点 */
+  private onPlayerChunkChangedForResources = (payload: { chunkId: string }) => {
+    this.loadChunkResources(payload.chunkId)
+  }
+
+  /** 从 REST API 加载指定区块的资源节点列表并渲染（需携带认证 token） */
+  private async loadChunkResources(chunkId: string | null): Promise<void> {
+    if (!chunkId) return
+    const userStore = useUserStore()
+    const token = userStore.accessToken ?? undefined
+    this.clearResourceSprites()
+    try {
+      const data = await apiGet<{ chunkId: string; nodes: ResourceNodeDTO[] }>(
+        `/resource/chunk/${chunkId}`,
+        token,
+      )
+      if (data.nodes) {
+        for (const node of data.nodes) {
+          this.renderResourceNode(node)
+        }
+      }
+    } catch (err) {
+      // 静默失败：区块可能尚未生成资源，或网络错误
+      console.warn('loadChunkResources failed:', err)
+    }
+  }
+
+  /** 渲染单个资源节点精灵（可点击采集） */
+  private renderResourceNode(node: ResourceNodeDTO): void {
+    const { x: worldX, y: worldY } = node.position
+    const { x, y } = gridToIso(worldX, worldY)
+    const textureKey = node.isDepleted ? `resource-${node.resourceType}-depleted` : `resource-${node.resourceType}`
+    const sprite = this.add.image(x, y - 8, textureKey)
+    sprite.setDepth(y + 1)
+    sprite.setInteractive({ useHandCursor: true })
+    sprite.on('pointerdown', () => this.onResourceNodeClick(node))
+    this.resourceSprites.set(node.id, sprite)
+    this.resourceNodeData.set(node.id, node)
+  }
+
+  /** 点击资源节点：距离 <= 2 格时发送采集请求 */
+  private onResourceNodeClick(node: ResourceNodeDTO): void {
+    if (node.isDepleted) return
+    const { gridX, gridY } = isoToGrid(this.player.x, this.player.y)
+    const playerGX = Math.round(gridX)
+    const playerGY = Math.round(gridY)
+    const dx = Math.abs(playerGX - node.position.x)
+    const dy = Math.abs(playerGY - node.position.y)
+    if (dx > 2 || dy > 2) {
+      EventBus.emit('game:toast', { message: '距离资源太远，请先靠近', type: 'warn' })
+      return
+    }
+    const socket = socketClient.instance
+    if (socket) {
+      socket.emit('resource:collect', { nodeId: node.id, x: playerGX, y: playerGY })
+    }
+  }
+
+  /** 采集成功：将节点标记为已耗尽（inventory:updated 已由 SocketClient 统一转发） */
+  private onResourceCollected = (payload: { nodeId: number }) => {
+    this.onResourceNodeDepleted({ nodeId: payload.nodeId })
+  }
+
+  /** 节点被采空：替换为 depleted 贴图并禁用交互 */
+  private onResourceNodeDepleted = (payload: { nodeId: number }) => {
+    const sprite = this.resourceSprites.get(payload.nodeId)
+    const node = this.resourceNodeData.get(payload.nodeId)
+    if (sprite && node) {
+      const depletedKey = `resource-${node.resourceType}-depleted`
+      sprite.setTexture(depletedKey)
+      sprite.disableInteractive()
+      node.isDepleted = true
+    }
+  }
+
+  /** 清除当前所有资源节点精灵 */
+  private clearResourceSprites(): void {
+    this.resourceSprites.forEach((sprite) => sprite.destroy())
+    this.resourceSprites.clear()
+    this.resourceNodeData.clear()
   }
 }

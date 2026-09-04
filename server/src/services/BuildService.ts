@@ -211,6 +211,32 @@ export class BuildService {
   getBuildTemplates(): BuildTemplate[] {
     return Object.values(BUILD_TEMPLATES);
   }
+
+  /**
+   * Get chat rooms located in a chunk (for rendering house markers)
+   */
+  async getRoomsInChunk(chunkId: string): Promise<
+    Array<{ id: number; chunkId: string; name: string; template: string; ownerId: string }>
+  > {
+    try {
+      const rooms: any = await query(
+        `SELECT id, chunk_id, name, template, owner_id
+         FROM chat_rooms WHERE chunk_id = ?`,
+        [chunkId]
+      );
+
+      return rooms.map((room: any) => ({
+        id: room.id,
+        chunkId: room.chunk_id,
+        name: room.name,
+        template: room.template,
+        ownerId: String(room.owner_id),
+      }));
+    } catch (error) {
+      logger.error('Failed to get rooms in chunk', error);
+      return [];
+    }
+  }
 }
 
 export default new BuildService();

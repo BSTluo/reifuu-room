@@ -7,11 +7,15 @@ import { errorHandler } from './middleware/errorHandler.js';
 import pool from './db/mysql.js';
 import { connectRedis } from './db/redis.js';
 import { initializeSocketIO } from './socket.js';
+import ResourceService from './services/ResourceService.js';
 
 import healthRouter from './routes/health.js';
 import authRouter from './routes/auth.js';
 import characterRouter from './routes/character.js';
 import mapRouter from './routes/map.js';
+import resourceRouter from './routes/resource.js';
+import buildRouter from './routes/build.js';
+import chatRouter from './routes/chat.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -29,10 +33,20 @@ app.use('/health', healthRouter);
 app.use('/auth', authRouter);
 app.use('/character', characterRouter);
 app.use('/map', mapRouter);
+app.use('/resource', resourceRouter);
+app.use('/build', buildRouter);
+app.use('/chat', chatRouter);
 
 app.use(errorHandler);
 
 const io = initializeSocketIO(httpServer);
+
+// Periodically respawn depleted resource nodes (wood 5min / stone 10min / mineral 30min)
+setInterval(() => {
+  ResourceService.respawnResources().catch((err) =>
+    logger.error('Resource respawn tick failed', err)
+  );
+}, 60_000);
 
 const testDatabaseConnection = async () => {
   try {

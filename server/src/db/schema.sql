@@ -142,6 +142,19 @@ CREATE TABLE IF NOT EXISTS chat_rooms (
     INDEX idx_owner (owner_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Chat messages table (room text chat, GDD 2.4)
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    room_id INT NOT NULL,
+    character_id INT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (room_id) REFERENCES chat_rooms(id) ON DELETE CASCADE,
+    FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE,
+    INDEX idx_room (room_id),
+    INDEX idx_room_created (room_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Explored chunks table (Fog of War, GDD 2.6)
 CREATE TABLE IF NOT EXISTS explored_chunks (
     id INT AUTO_INCREMENT PRIMARY KEY,
