@@ -18,6 +18,7 @@ import resourceRouter from './routes/resource.js';
 import buildRouter from './routes/build.js';
 import chatRouter from './routes/chat.js';
 import friendRouter from './routes/friend.js';
+import townRouter from './routes/town.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -39,6 +40,7 @@ app.use('/resource', resourceRouter);
 app.use('/build', buildRouter);
 app.use('/chat', chatRouter);
 app.use('/friend', friendRouter);
+app.use('/town', townRouter);
 
 app.use(errorHandler);
 

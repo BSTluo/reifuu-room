@@ -38,6 +38,8 @@ export interface ServerToClientEvents {
   'friend:message-sent': (data: { message: PrivateMessagePayload }) => void
   // Pigeon mail (server -> client)
   'friend:pigeon-delivered': (data: { pigeonId: number; senderId: number; senderNickname: string; content: string }) => void
+  // Town + Portal (server -> client)
+  'town:teleport-confirmed': (data: { position: { x: number; y: number }; chunkId: string; townName: string; cooldownRemaining: number }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -68,6 +70,8 @@ export interface ClientToServerEvents {
   'friend:respond': (data: { requestId: number; accept: boolean }) => void
   'friend:teleport': (data: { toCharacterId: number }) => void
   'friend:send-message': (data: { toCharacterId: number; content: string }) => void
+  // Town + Portal (client -> server)
+  'town:teleport': (data: { townId: number }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -181,6 +185,9 @@ class SocketClient {
     })
     this.socket.on('friend:pigeon-delivered', (data: { pigeonId: number; senderId: number; senderNickname: string; content: string }) => {
       EventBus.emit('friend:pigeon-delivered', data)
+    })
+    this.socket.on('town:teleport-confirmed', (data: { position: { x: number; y: number }; chunkId: string; townName: string; cooldownRemaining: number }) => {
+      EventBus.emit('town:teleport-confirmed', data)
     })
 
     this.socket.on('disconnect', (reason) => {

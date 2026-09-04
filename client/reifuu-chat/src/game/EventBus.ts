@@ -111,6 +111,16 @@ export type GameEvents = {
   'ui:open-pigeon-compose': { characterId: number; nickname: string }
   /** UI 请求关闭飞鸽传书撰写窗口 */
   'ui:close-pigeon-compose': void
+
+  // Town + Portal (GDD §2.3 城镇系统 + 传送门)
+  /** 城镇传送成功（服务端确认） */
+  'town:teleport-confirmed': { position: { x: number; y: number }; chunkId: string; townName: string; cooldownRemaining: number }
+  /** UI 请求打开传送门面板 */
+  'ui:open-portal-panel': void
+  /** UI 请求关闭传送门面板 */
+  'ui:close-portal-panel': void
+  /** UI 请求传送到某城镇 */
+  'ui:teleport-town': { townId: number }
 }
 
 export const EventBus = mitt<GameEvents>()

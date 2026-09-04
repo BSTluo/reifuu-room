@@ -35,6 +35,9 @@ interface Config {
   pigeon: {
     delayScale: number;
   };
+  town: {
+    portalCooldownSeconds: number;
+  };
 }
 
 const config: Config = {
@@ -70,6 +73,10 @@ const config: Config = {
   pigeon: {
     // 飞鸽传书延迟缩放系数（E2E 测试用，默认 1 表示真实延迟）
     delayScale: parseFloat(process.env.PIGEON_DELAY_SCALE || '1'),
+  },
+  town: {
+    // 传送门冷却时间（秒），默认 300 = 5 分钟
+    portalCooldownSeconds: parseInt(process.env.PORTAL_COOLDOWN_SECONDS || '300', 10),
   },
 };
 

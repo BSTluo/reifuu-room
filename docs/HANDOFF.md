@@ -107,6 +107,9 @@ npm run dev        # Vite，端口 5173
 ### 4.7 出生点选择系统（✅ 已完成，GDD §2.1）
 见 §7。
 
+### 4.8 城镇系统 + 传送门（✅ 已完成，GDD §2.3）
+见 §8.8。
+
 ---
 
 ## 5. ⭐ 视野迷雾系统（Phase 2，✅ 前后端均已完成）
@@ -293,6 +296,25 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 ### 8.7 未实现（后续 Phase 3）
 - 隐身模式、拉黑（Phase 5）。飞鸽传书 ✓ 已完成（§8.6）。
 
+### 8.8 ⭐ 城镇系统 + 传送门（GDD §2.3，✅ 前后端均已完成）
+- **城镇自动生成**：`server/src/services/TownService.ts` 的 `detectTownAfterBuild(chunkId, builderCharacterId)`。建房后（`BuildService.buildChatRoom` 末尾 fire-and-forget 调用）检测以该区块为中心的 3x3 范围，若 `map_chunks` 中 `chunk_type='chatroom'` 数量 ≥ 5（`TOWN_DENSITY_THRESHOLD`）则自动创建城镇（幂等：按 `center_chunk_id` 查重）。城镇名自动生成 `城镇#<时间戳>`，等级固定 1。
+- **表**：`towns`（id, name, center_chunk_id, level, founded_by, created_at）、`town_visits`（character_id, town_id, visited_at，`INSERT IGNORE` 幂等）。迁移 SQL 见 `server/add_town_system.sql`（已执行）。
+- **REST**（`server/src/routes/town.ts`，均需 ******：
+  - `GET /town/list`：城镇列表，含 `visited` 标记（当前角色是否到访过，子查询）。
+  - `GET /town/visited`：当前角色已到访的城镇列表。
+  - `POST /town/:townId/teleport`：传送到城镇。校验：城镇存在（404）、已到访解锁（403）、冷却（429，与好友传送共用 `reifuu:teleport:cooldown:{characterId}` 键）。落点 = 城镇中心区块中心附近随机偏移 1-2 格（仍在中心区块内），写 DB+Redis，自动探索城镇周边 3x3（GDD §2.6），写入冷却。
+- **socket**（`server/src/socket.ts`）：
+  - `town:teleport`（C→S，`{ townId }`）→ 成功回 `town:teleport-confirmed`（含 position/chunkId/townName/cooldownRemaining），失败回 `error` 事件。镜像 `friend:teleport`（切区块、探索、players 列表、enter-chunk 广播）。
+  - **到访记录**：`player:move` 且 `chunkChanged` 时，若新区块是某城镇中心（`towns.center_chunk_id` 匹配）→ `recordVisit` 解锁传送门。城镇传送本身也记录到访。
+- **配置**：`config.town.portalCooldownSeconds`（env `PORTAL_COOLDOWN_SECONDS`，默认 300）。
+- **前端**：
+  - `client/reifuu-chat/src/components/game/HUD/TownPortalPanel.vue`：传送门面板，列出城镇（已到访=可传送 / 未到访=锁定），传送按钮 2s 防抖，挂载时拉 `/town/list`，传送确认后刷新。
+  - `GameView.vue`：动作按钮「🌀 传送门」→ 打开面板；`onTeleportTown` → `socketClient.emit('town:teleport')`。
+  - `WorldScene.ts`：`loadChunkPortals()` 拉 `/town/list`，对 `centerChunkId` 匹配当前区块的城镇渲染传送门标记（`PreloadScene.generatePortalTexture()` 蓝紫漩涡贴图），点击 → `ui:open-portal-panel`；`onTownTeleportConfirmed` 更新位置/切区块/toast。
+  - `EventBus.ts` / `SocketClient.ts` / `api/types.ts`：新增 `town:teleport-confirmed`、`ui:open-portal-panel`、`ui:close-portal-panel`、`ui:teleport-town` 事件与 `TownDTO` 类型。
+- **验证**：E2E 21/21 通过 —— 建房触发城镇自动生成（3x3 密度 ≥5）、城镇列表含 visited 标记、未到访传送 403、走到中心区块解锁到访、REST 传送（位置/区块/城镇名/冷却/自动探索 3x3）、冷却 429、不存在城镇 404、socket 传送冷却 error、socket 传送未解锁 error、socket 传送成功链路（confirmed 事件 + 落点 + townName）。
+- **E2E 踩坑记录**：城镇检测以**被建造的区块**为中心，其 3x3 范围须 ≥5 个聊天室 → 测试须先建 4 个外围、最后建中心区块触发；到访记录只在 `player:move` 且 `chunkChanged` 时触发 → 测试须从相邻区块跨入中心区块（不能直接落在中心区块再 move）；传送落点偏移量原误乘 32（跨区块），已修为按格偏移（仍在中心区块内）。
+
 ---
 
 ## 9. 测试账号（仍在数据库中）
@@ -330,6 +352,7 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 - ~~前端迷雾完全未做~~（**已解决**，§5.2 完成）。
 - 小地图、资源节点/建造/聊天室前端交互 UI（**已补齐**：`WorldScene` 资源节点渲染 + `GameView` 背包/建造面板）。
 - 好友系统（✅ 已完成，见 §8）/ 交通工具系统 / 传送门系统仍未实现（GDD Phase 3/4）。
+  - **更新**：传送门系统 ✅ 已完成（见 §8.8 城镇系统 + 传送门）。Phase 3 剩余：交通工具系统（Phase 4）。
 - 聊天室成员角色（房主/成员/访客）目前仅有房主 vs 访客二分，邀请制与成员管理未实现（见 §6.2）。
 - 数据库 `192.168.12.1` 是内网地址，换环境/远程时需改 `.env`（曾有短暂不可达导致 500）。
 - **表结构迁移注意**：`schema.sql` 用 `CREATE TABLE IF NOT EXISTS`，不会 ALTER 已存在的表。若在旧库上跑 schema，`map_chunks` / `resource_nodes` / `inventory_items` / `chat_rooms` 等新列需手动迁移或删表重建（本次交接中 `map_chunks` 因缺 `chunk_id/chunk_type/owner_id/is_public` 列已重建）。
@@ -344,7 +367,7 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 3. ~~复核现有 API 的前端对接~~（**已完成**：资源采集/建造/背包/聊天室均已端到端联通并 REST 验证通过）。
 4. ~~进入聊天室实际使用~~（**已完成** §6）：点击房屋标记 → 进入房间 → 实时文字聊天，前后端 + 浏览器 UI 均验证通过。
 5. **聊天室进阶功能**：房间权限管理（成员角色/邀请制）、音乐/视频同步播放、房间装饰系统。
-6. ~~好友系统核心~~（**已完成** §8）。Phase 3 剩余：好友传送（✅ 已完成）、好友私聊（✅ 已完成）、飞鸽传书（✅ 已完成 §8.6）、隐身模式、传送门。
-7. 规划 Phase 4（交通工具）。
+6. ~~好友系统核心~~（**已完成** §8）。Phase 3 剩余：好友传送（✅ 已完成）、好友私聊（✅ 已完成）、飞鸽传书（✅ 已完成 §8.6）、隐身模式、传送门（✅ 已完成 §8.8）。
+7. 规划 Phase 4（交通工具）。剩余 GDD 功能：聊天室进阶（见 5）、隐身/拉黑（Phase 5）、交通工具（Phase 4）。
 8. 建议为前端新增 UI/UX 专职成员补齐界面质感（该角色上一团队已移除）。
 9. 前端接入正式美术资源时替换 `PreloadScene` 的 Graphics 生成贴图（贴图 key 不变即可平滑替换）。

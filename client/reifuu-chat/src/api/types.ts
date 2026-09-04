@@ -163,3 +163,12 @@ export interface PigeonMessageDTO {
 export interface PigeonSettingsDTO {
   rejectStrangerPigeon: boolean
 }
+
+/** 城镇信息 (GDD §2.3 城镇系统 + 传送门) */
+export interface TownDTO {
+  id: number
+  name: string
+  level: number
+  centerChunkId: string
+  visited: boolean
+}

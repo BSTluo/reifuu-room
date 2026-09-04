@@ -28,6 +28,7 @@ export class PreloadScene extends Phaser.Scene {
     this.generatePlayerTexture()
     this.generateResourceTextures()
     this.generateHouseTextures()
+    this.generatePortalTexture()
   }
 
   create(): void {
@@ -147,5 +148,33 @@ export class PreloadScene extends Phaser.Scene {
       g.generateTexture(key, width, height)
       g.destroy()
     }
+  }
+
+  /** 生成传送门占位贴图（蓝紫魔法旋涡，像素占位画风） */
+  private generatePortalTexture(): void {
+    const key = 'portal'
+    if (this.textures.exists(key)) return
+
+    const width = 40
+    const height = 48
+    const g = this.add.graphics()
+    // 底座阴影
+    g.fillStyle(0x000000, 0.2)
+    g.fillEllipse(width / 2, height - 5, 30, 10)
+    // 外圈石环
+    g.fillStyle(0x37474f, 1)
+    g.fillEllipse(width / 2, height / 2 + 4, width - 6, height - 10)
+    // 旋涡（三层椭圆，由外到内颜色渐亮）
+    g.fillStyle(0x4527a0, 1)
+    g.fillEllipse(width / 2, height / 2 + 2, width - 14, height - 16)
+    g.fillStyle(0x7e57c2, 1)
+    g.fillEllipse(width / 2, height / 2, width - 20, height - 22)
+    g.fillStyle(0xb39ddb, 1)
+    g.fillEllipse(width / 2, height / 2 - 2, width - 28, height - 30)
+    // 中心亮核
+    g.fillStyle(0xe1bee7, 1)
+    g.fillEllipse(width / 2, height / 2 - 4, 8, 10)
+    g.generateTexture(key, width, height)
+    g.destroy()
   }
 }
