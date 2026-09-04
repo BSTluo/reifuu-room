@@ -13,6 +13,8 @@ import PluginService from './services/PluginService.js';
 import BuildService from './services/BuildService.js';
 import FriendService from './services/FriendService.js';
 import PigeonMailService from './services/PigeonMailService.js';
+import TeamService from './services/TeamService.js';
+import { calculateChunkLimit } from './services/TeamService.js';
 import { query } from './db/mysql.js';
 
 /**
@@ -31,6 +33,62 @@ function getSocketForCharacter(io: SocketIOServer, characterId: string): Socket 
     if (s) return s;
   }
   return null;
+}
+
+/**
+ * Build the full team state payload for a character (mirrors GET /team/info).
+ * Returns null if the character is not in a team.
+ */
+async function buildTeamStatePayload(characterId: string): Promise<any | null> {
+  const membership = await TeamService.getMembership(characterId);
+  if (!membership) {
+    return {
+      team: null,
+      role: null,
+      members: [],
+      applications: [],
+      invitations: await TeamService.getPendingInvitations(characterId),
+      chunkUsage: null,
+    };
+  }
+  const isOnline = async (cid: string) => {
+    const { default: redisClient, prefixKey } = await import('./db/redis.js');
+    return (await redisClient.exists(prefixKey(`player:${cid}:position`))) === 1;
+  };
+  const [team, members, applications, invitations, usedChunks, memberCount] = await Promise.all([
+    TeamService.getTeamInfo(membership.teamId),
+    TeamService.getTeamMembers(membership.teamId, isOnline),
+    membership.role === 'leader'
+      ? TeamService.getPendingApplications(membership.teamId)
+      : Promise.resolve([]),
+    TeamService.getPendingInvitations(characterId),
+    TeamService.getTeamChunkUsage(membership.teamId),
+    TeamService.getMemberCount(membership.teamId),
+  ]);
+  return {
+    team,
+    role: membership.role,
+    members,
+    applications,
+    invitations,
+    chunkUsage: { used: usedChunks, limit: calculateChunkLimit(memberCount) },
+  };
+}
+
+/** Emit an event to every online member of a team (optionally excluding one). */
+async function notifyTeamMembers(
+  io: SocketIOServer,
+  teamId: number,
+  event: string,
+  payload: any,
+  excludeCharacterId?: string
+): Promise<void> {
+  const memberIds = await TeamService.getTeamMemberIds(teamId);
+  for (const cid of memberIds) {
+    if (excludeCharacterId && cid === excludeCharacterId) continue;
+    const s = getSocketForCharacter(io, cid);
+    if (s) s.emit(event, payload);
+  }
 }
 
 interface SocketData {
@@ -672,6 +730,374 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       } catch (error: any) {
         logger.error('Pigeon mark-read error', error);
         socket.emit('error', { message: error.message || 'Failed to mark message read' });
+      }
+    });
+
+    // ---- Team system (团队系统, GDD 2.9) ----
+
+    // Client asks for full team state (when opening the team panel).
+    socket.on('team:request-state', async () => {
+      if (!character) return;
+      try {
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+      } catch (error: any) {
+        logger.error('Team state error', error);
+        socket.emit('error', { message: error.message || 'Failed to load team state' });
+      }
+    });
+
+    // Create a team
+    socket.on('team:create', async (data: { name: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const team = await TeamService.createTeam(character.id, String(data?.name ?? ''));
+        // Refresh full state for creator
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+      } catch (error: any) {
+        logger.error('Team create error', error);
+        socket.emit('error', { message: error.message || 'Failed to create team' });
+      }
+    });
+
+    // Leader invites a player
+    socket.on('team:invite', async (data: { characterId: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const result = await TeamService.inviteMember(
+          character.id,
+          String(data?.characterId ?? '')
+        );
+        // Notify the invited player in real time
+        const targetSocket = getSocketForCharacter(io, String(data?.characterId));
+        if (targetSocket) {
+          const invitations = await TeamService.getPendingInvitations(String(data?.characterId));
+          targetSocket.emit('team:invite-received', {
+            invitationId: result.invitationId,
+            teamId: result.teamId,
+            teamName: result.teamName,
+            fromNickname: character.nickname,
+          });
+          // Also send updated invitations list
+          targetSocket.emit('team:invitations', invitations);
+        }
+        // Refresh inviter's state (they see the invitation in their sent list)
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+      } catch (error: any) {
+        logger.error('Team invite error', error);
+        socket.emit('error', { message: error.message || 'Failed to invite member' });
+      }
+    });
+
+    // Player applies to join a team
+    socket.on('team:apply', async (data: { teamId: number; message?: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const teamId = Number(data?.teamId);
+        const result = await TeamService.applyToTeam(
+          character.id,
+          teamId,
+          data?.message
+        );
+        // Notify the leader of the team
+        const teamInfo = await TeamService.getTeamInfo(teamId);
+        const leaderSocket = getSocketForCharacter(io, teamInfo.leaderCharacterId);
+        if (leaderSocket) {
+          const applications = await TeamService.getPendingApplications(teamId);
+          leaderSocket.emit('team:application-received', {
+            applicationId: result.applicationId,
+            teamId,
+            teamName: result.teamName,
+            characterId: character.id,
+            nickname: character.nickname,
+            message: data?.message ?? null,
+          });
+          leaderSocket.emit('team:applications', applications);
+        }
+        socket.emit('team:applied', { teamId, teamName: result.teamName });
+      } catch (error: any) {
+        logger.error('Team apply error', error);
+        socket.emit('error', { message: error.message || 'Failed to apply to team' });
+      }
+    });
+
+    // Invitee accepts an invitation
+    socket.on('team:accept-invite', async (data: { invitationId: number }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const result = await TeamService.acceptInvitation(
+          Number(data?.invitationId),
+          character.id
+        );
+        // Refresh acceptor's full state
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+        // Notify all team members about the new member
+        await notifyTeamMembers(io, result.teamId, 'team:member-joined', {
+          teamId: result.teamId,
+          characterId: character.id,
+          nickname: character.nickname,
+        }, character.id);
+        // Send each member (including the new one) their refreshed state
+        const memberIds = await TeamService.getTeamMemberIds(result.teamId);
+        for (const cid of memberIds) {
+          const s = getSocketForCharacter(io, cid);
+          if (s) {
+            const ms = await buildTeamStatePayload(cid);
+            s.emit('team:state', ms);
+          }
+        }
+      } catch (error: any) {
+        logger.error('Team accept invite error', error);
+        socket.emit('error', { message: error.message || 'Failed to accept invitation' });
+      }
+    });
+
+    // Invitee rejects an invitation
+    socket.on('team:reject-invite', async (data: { invitationId: number }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        await TeamService.rejectInvitation(Number(data?.invitationId), character.id);
+        // Refresh state for the rejecting user (removes invitation)
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+      } catch (error: any) {
+        logger.error('Team reject invite error', error);
+        socket.emit('error', { message: error.message || 'Failed to reject invitation' });
+      }
+    });
+
+    // Leader accepts an application
+    socket.on('team:accept-application', async (data: { applicationId: number }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const result = await TeamService.acceptApplication(
+          Number(data?.applicationId),
+          character.id
+        );
+        // Refresh leader's state
+        const leaderState = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', leaderState);
+        // Notify the applicant
+        const applicantSocket = getSocketForCharacter(io, result.characterId);
+        if (applicantSocket) {
+          const applicantState = await buildTeamStatePayload(result.characterId);
+          applicantSocket.emit('team:state', applicantState);
+        }
+        // Notify all team members about the new member
+        await notifyTeamMembers(io, result.teamId, 'team:member-joined', {
+          teamId: result.teamId,
+          characterId: result.characterId,
+          nickname: result.nickname,
+        }, character.id);
+        // Refresh all members' states
+        const memberIds = await TeamService.getTeamMemberIds(result.teamId);
+        for (const cid of memberIds) {
+          const s = getSocketForCharacter(io, cid);
+          if (s) {
+            const ms = await buildTeamStatePayload(cid);
+            s.emit('team:state', ms);
+          }
+        }
+      } catch (error: any) {
+        logger.error('Team accept application error', error);
+        socket.emit('error', { message: error.message || 'Failed to accept application' });
+      }
+    });
+
+    // Leader rejects an application
+    socket.on('team:reject-application', async (data: { applicationId: number }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        await TeamService.rejectApplication(Number(data?.applicationId), character.id);
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+      } catch (error: any) {
+        logger.error('Team reject application error', error);
+        socket.emit('error', { message: error.message || 'Failed to reject application' });
+      }
+    });
+
+    // Leader kicks a member
+    socket.on('team:kick', async (data: { characterId: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const result = await TeamService.kickMember(character.id, String(data?.characterId ?? ''));
+        // Refresh leader's state
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+        // Notify kicked member
+        const kickedSocket = getSocketForCharacter(io, String(data?.characterId));
+        if (kickedSocket) {
+          kickedSocket.emit('team:kicked', {
+            teamId: result.teamId,
+            teamName: result.teamName,
+          });
+          const kickedState = await buildTeamStatePayload(String(data?.characterId));
+          kickedSocket.emit('team:state', kickedState);
+        }
+        // Notify remaining members
+        await notifyTeamMembers(io, result.teamId, 'team:member-left', {
+          teamId: result.teamId,
+          characterId: String(data?.characterId),
+          nickname: result.nickname,
+        }, character.id);
+      } catch (error: any) {
+        logger.error('Team kick error', error);
+        socket.emit('error', { message: error.message || 'Failed to kick member' });
+      }
+    });
+
+    // Member leaves the team
+    socket.on('team:leave', async () => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const membership = await TeamService.getMembership(character.id);
+        if (!membership) {
+          socket.emit('error', { message: 'You are not in a team' });
+          return;
+        }
+        const teamId = membership.teamId;
+        const result = await TeamService.leaveTeam(character.id);
+        // Refresh leaver's state
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+        // Notify remaining members
+        await notifyTeamMembers(io, teamId, 'team:member-left', {
+          teamId,
+          characterId: character.id,
+          nickname: character.nickname,
+        });
+        // Refresh all remaining members' states
+        const memberIds = await TeamService.getTeamMemberIds(teamId);
+        for (const cid of memberIds) {
+          const s = getSocketForCharacter(io, cid);
+          if (s) {
+            const ms = await buildTeamStatePayload(cid);
+            s.emit('team:state', ms);
+          }
+        }
+      } catch (error: any) {
+        logger.error('Team leave error', error);
+        socket.emit('error', { message: error.message || 'Failed to leave team' });
+      }
+    });
+
+    // Leader transfers leadership
+    socket.on('team:transfer', async (data: { characterId: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const result = await TeamService.transferLeadership(
+          character.id,
+          String(data?.characterId ?? '')
+        );
+        // Refresh all members' states (leader changed)
+        const memberIds = await TeamService.getTeamMemberIds(result.teamId);
+        for (const cid of memberIds) {
+          const s = getSocketForCharacter(io, cid);
+          if (s) {
+            const ms = await buildTeamStatePayload(cid);
+            s.emit('team:state', ms);
+          }
+        }
+      } catch (error: any) {
+        logger.error('Team transfer error', error);
+        socket.emit('error', { message: error.message || 'Failed to transfer leadership' });
+      }
+    });
+
+    // Leader disbands the team
+    socket.on('team:disband', async () => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const membership = await TeamService.getMembership(character.id);
+        if (!membership) {
+          socket.emit('error', { message: 'You are not in a team' });
+          return;
+        }
+        const teamId = membership.teamId;
+        const result = await TeamService.disbandTeam(character.id);
+        // Notify all former members
+        for (const cid of result.memberIds) {
+          const s = getSocketForCharacter(io, cid);
+          if (s) {
+            s.emit('team:disbanded', {
+              teamId: result.teamId,
+              teamName: result.teamName,
+            });
+            const ms = await buildTeamStatePayload(cid);
+            s.emit('team:state', ms);
+          }
+        }
+      } catch (error: any) {
+        logger.error('Team disband error', error);
+        socket.emit('error', { message: error.message || 'Failed to disband team' });
+      }
+    });
+
+    // Team chat message (real-time only, not persisted)
+    socket.on('team:chat', async (data: { content: string }) => {
+      if (!character) return;
+      try {
+        const membership = await TeamService.getMembership(character.id);
+        if (!membership) {
+          socket.emit('error', { message: 'You are not in a team' });
+          return;
+        }
+        const content = String(data?.content ?? '').trim();
+        if (!content) return;
+        if (content.length > 500) {
+          socket.emit('error', { message: 'Message too long (max 500 characters)' });
+          return;
+        }
+        const teamId = membership.teamId;
+        const payload = {
+          teamId,
+          fromCharacterId: character.id,
+          fromNickname: character.nickname,
+          content,
+          timestamp: new Date().toISOString(),
+        };
+        // Broadcast to all team members (including sender)
+        await notifyTeamMembers(io, teamId, 'team:chat-message', payload);
+      } catch (error: any) {
+        logger.error('Team chat error', error);
+        socket.emit('error', { message: error.message || 'Failed to send team message' });
       }
     });
 

@@ -13,11 +13,13 @@ import ChatPanel from '../components/game/HUD/ChatPanel.vue'
 import FriendListPanel from '../components/game/HUD/FriendListPanel.vue'
 import MailboxPanel from '../components/game/HUD/MailboxPanel.vue'
 import PigeonMailPanel from '../components/game/HUD/PigeonMailPanel.vue'
+import TeamPanel from '../components/game/HUD/TeamPanel.vue'
 import PlayerInfoCard from '../components/game/HUD/PlayerInfoCard.vue'
 import { apiGet, apiPost, ApiRequestError } from '../api/http'
 import type { BuildTemplateDTO, OwnedChunkDTO } from '../api/types'
 import { registerFriendListeners, useFriendStore } from '../stores/friend'
 import { registerPigeonListeners, usePigeonStore } from '../stores/pigeon'
+import { registerTeamListeners, useTeamStore } from '../stores/team'
 
 const userStore = useUserStore()
 const explorationStore = useExplorationStore()
@@ -26,15 +28,17 @@ const inventoryStore = useInventoryStore()
 const roomStore = useRoomStore()
 const friendStore = useFriendStore()
 const pigeonStore = usePigeonStore()
+const teamStore = useTeamStore()
 
 const phaserReady = ref(false)
 const lastPosition = ref({ x: 0, y: 0 })
 const socketStatus = ref<'idle' | 'connected' | 'disconnected' | 'error'>('idle')
 
-// ---- 好友 / 信箱 ----
+// ---- 好友 / 信箱 / 团队 ----
 const showFriends = ref(false)
 const showMailbox = ref(false)
 const showPigeon = ref(false)
+const showTeam = ref(false)
 const selectedPlayer = ref<{ characterId: string; nickname: string } | null>(null)
 
 // ---- 背包 / 建造 ----
@@ -226,6 +230,8 @@ onMounted(() => {
   registerFriendListeners()
   // 注册飞鸽传信 store 的 EventBus 监听
   registerPigeonListeners()
+  // 注册团队 store 的 EventBus 监听
+  registerTeamListeners()
 
   // 迷雾 store 先在 socket 建立前监听，确保不遗漏 map:initial-explored / map:explore 事件
   explorationStore.startListening()
@@ -309,6 +315,10 @@ onBeforeUnmount(() => {
           🕊️ 飞鸽传书
           <span v-if="pigeonStore.unreadCount > 0" class="mail-badge">{{ pigeonStore.unreadCount }}</span>
         </button>
+        <button class="action-btn" @click="showTeam = !showTeam">
+          👥 团队
+          <span v-if="teamStore.inTeam" class="team-badge">{{ teamStore.members.length }}</span>
+        </button>
       </div>
 
       <div v-if="roomStore.inRoom" class="panel chat-panel-wrap">
@@ -384,6 +394,10 @@ onBeforeUnmount(() => {
 
       <div v-if="showPigeon" class="panel">
         <PigeonMailPanel />
+      </div>
+
+      <div v-if="showTeam" class="panel">
+        <TeamPanel />
       </div>
     </div>
 
@@ -470,6 +484,21 @@ onBeforeUnmount(() => {
   background: #ef5350;
   color: #fff;
   font-size: 10px;
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 8px;
+  padding: 0 3px;
+}
+.team-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: #4dd0e1;
+  color: #1a2530;
+  font-size: 10px;
+  font-weight: bold;
   min-width: 16px;
   height: 16px;
   line-height: 16px;

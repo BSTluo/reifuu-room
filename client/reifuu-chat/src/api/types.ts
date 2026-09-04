@@ -146,3 +146,70 @@ export interface PigeonSendResultDTO {
   delayMs: number
   delivered: boolean
 }
+
+// ---- Team system (团队系统) DTOs ----
+
+export type TeamRole = 'leader' | 'member'
+
+export interface TeamDTO {
+  teamId: number
+  name: string
+  leaderCharacterId: string
+  leaderNickname: string
+  createdAt: string
+}
+
+export interface TeamMemberDTO {
+  characterId: string
+  nickname: string
+  role: TeamRole
+  isOnline: boolean
+  joinedAt: string
+}
+
+export interface TeamInvitationDTO {
+  id: number
+  teamId: number
+  teamName: string
+  fromNickname: string
+  createdAt: string
+}
+
+export interface TeamApplicationDTO {
+  id: number
+  teamId: number
+  characterId: string
+  nickname: string
+  message: string | null
+  createdAt: string
+}
+
+export interface TeamChunkUsageDTO {
+  used: number
+  limit: number
+}
+
+export interface TeamStateDTO {
+  team: TeamDTO | null
+  role: TeamRole | null
+  members: TeamMemberDTO[]
+  applications: TeamApplicationDTO[]
+  invitations: TeamInvitationDTO[]
+  chunkUsage: TeamChunkUsageDTO | null
+}
+
+export interface TeamSearchResultDTO {
+  teamId: number
+  name: string
+  leaderNickname: string
+  memberCount: number
+  createdAt: string
+}
+
+export interface TeamChatMessageDTO {
+  teamId: number
+  fromCharacterId: string
+  fromNickname: string
+  content: string
+  timestamp: string
+}

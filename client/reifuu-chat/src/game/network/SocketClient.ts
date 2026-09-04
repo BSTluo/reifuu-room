@@ -1,6 +1,6 @@
 import { io, Socket } from 'socket.io-client'
 import { EventBus } from '../EventBus'
-import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO } from '../../api/types'
+import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO } from '../../api/types'
 
 export interface ServerToClientEvents {
   echo: (payload: unknown) => void
@@ -40,6 +40,18 @@ export interface ServerToClientEvents {
   'pigeon:sent': (data: { messageId: number; toCharacterId: string; toNickname: string; delayMs: number; delivered: boolean }) => void
   'pigeon:delivered': (data: { messageId: number; fromCharacterId: string; fromNickname: string; content: string; createdAt: string }) => void
   'pigeon:read-confirmed': (data: { messageId: number; unreadCount: number }) => void
+  // Team events (server -> client)
+  'team:state': (data: TeamStateDTO) => void
+  'team:invite-received': (data: { invitationId: number; teamId: number; teamName: string; fromNickname: string }) => void
+  'team:application-received': (data: { applicationId: number; teamId: number; teamName: string; characterId: string; nickname: string; message: string | null }) => void
+  'team:applications': (data: TeamApplicationDTO[]) => void
+  'team:invitations': (data: TeamInvitationDTO[]) => void
+  'team:applied': (data: { teamId: number; teamName: string }) => void
+  'team:member-joined': (data: { teamId: number; characterId: string; nickname: string }) => void
+  'team:member-left': (data: { teamId: number; characterId: string; nickname: string }) => void
+  'team:kicked': (data: { teamId: number; teamName: string }) => void
+  'team:disbanded': (data: { teamId: number; teamName: string }) => void
+  'team:chat-message': (data: TeamChatMessageDTO) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -66,6 +78,20 @@ export interface ClientToServerEvents {
   'pigeon:request-state': () => void
   'pigeon:send': (data: { toCharacterId: string; content: string }) => void
   'pigeon:mark-read': (data: { messageId: number }) => void
+  // Team events (client -> server)
+  'team:request-state': () => void
+  'team:create': (data: { name: string }) => void
+  'team:invite': (data: { characterId: string }) => void
+  'team:apply': (data: { teamId: number; message?: string }) => void
+  'team:accept-invite': (data: { invitationId: number }) => void
+  'team:reject-invite': (data: { invitationId: number }) => void
+  'team:accept-application': (data: { applicationId: number }) => void
+  'team:reject-application': (data: { applicationId: number }) => void
+  'team:kick': (data: { characterId: string }) => void
+  'team:leave': () => void
+  'team:transfer': (data: { characterId: string }) => void
+  'team:disband': () => void
+  'team:chat': (data: { content: string }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -187,6 +213,41 @@ class SocketClient {
     })
     this.socket.on('pigeon:read-confirmed', (data: { messageId: number; unreadCount: number }) => {
       EventBus.emit('pigeon:read-confirmed', data)
+    })
+
+    // Team events: forward to EventBus for the team store / UI
+    this.socket.on('team:state', (data: TeamStateDTO) => {
+      EventBus.emit('team:state', data)
+    })
+    this.socket.on('team:invite-received', (data: { invitationId: number; teamId: number; teamName: string; fromNickname: string }) => {
+      EventBus.emit('team:invite-received', data)
+    })
+    this.socket.on('team:application-received', (data: { applicationId: number; teamId: number; teamName: string; characterId: string; nickname: string; message: string | null }) => {
+      EventBus.emit('team:application-received', data)
+    })
+    this.socket.on('team:applications', (data: TeamApplicationDTO[]) => {
+      EventBus.emit('team:applications', data)
+    })
+    this.socket.on('team:invitations', (data: TeamInvitationDTO[]) => {
+      EventBus.emit('team:invitations', data)
+    })
+    this.socket.on('team:applied', (data: { teamId: number; teamName: string }) => {
+      EventBus.emit('team:applied', data)
+    })
+    this.socket.on('team:member-joined', (data: { teamId: number; characterId: string; nickname: string }) => {
+      EventBus.emit('team:member-joined', data)
+    })
+    this.socket.on('team:member-left', (data: { teamId: number; characterId: string; nickname: string }) => {
+      EventBus.emit('team:member-left', data)
+    })
+    this.socket.on('team:kicked', (data: { teamId: number; teamName: string }) => {
+      EventBus.emit('team:kicked', data)
+    })
+    this.socket.on('team:disbanded', (data: { teamId: number; teamName: string }) => {
+      EventBus.emit('team:disbanded', data)
+    })
+    this.socket.on('team:chat-message', (data: TeamChatMessageDTO) => {
+      EventBus.emit('team:chat-message', data)
     })
 
     this.socket.on('disconnect', (reason) => {

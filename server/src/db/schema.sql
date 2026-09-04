@@ -56,6 +56,17 @@ CREATE TABLE IF NOT EXISTS resources (
     INDEX idx_type (resource_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Teams table (GDD 2.9 团队系统) — defined before map_chunks due to FK
+CREATE TABLE IF NOT EXISTS teams (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(30) NOT NULL,
+    leader_id INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY idx_team_name (name),
+    FOREIGN KEY (leader_id) REFERENCES characters(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Map chunks table (placeholder for Phase 1)
 -- Using grid coordinates for chunks
 CREATE TABLE IF NOT EXISTS map_chunks (
@@ -66,12 +77,14 @@ CREATE TABLE IF NOT EXISTS map_chunks (
     chunk_id VARCHAR(50) NOT NULL,
     chunk_type ENUM('empty', 'chatroom') DEFAULT 'empty',
     owner_id INT NULL,
+    team_id INT NULL,
     is_public BOOLEAN DEFAULT FALSE,
     chunk_data JSON,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE,
     FOREIGN KEY (owner_id) REFERENCES characters(id) ON DELETE SET NULL,
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE SET NULL,
     UNIQUE KEY idx_chunk_position (room_id, chunk_x, chunk_y),
     UNIQUE KEY idx_chunk_id (chunk_id),
     INDEX idx_room_chunks (room_id),
@@ -211,4 +224,56 @@ CREATE TABLE IF NOT EXISTS pigeon_messages (
     INDEX idx_from (from_character_id),
     FOREIGN KEY (from_character_id) REFERENCES characters(id) ON DELETE CASCADE,
     FOREIGN KEY (to_character_id) REFERENCES characters(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Teams table (GDD 2.9 团队系统)
+CREATE TABLE IF NOT EXISTS teams (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(30) NOT NULL,
+    leader_id INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY idx_team_name (name),
+    FOREIGN KEY (leader_id) REFERENCES characters(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Team members table
+CREATE TABLE IF NOT EXISTS team_members (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    team_id INT NOT NULL,
+    character_id INT NOT NULL,
+    role ENUM('leader', 'member') NOT NULL DEFAULT 'member',
+    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY idx_team_member (team_id, character_id),
+    INDEX idx_team (team_id),
+    INDEX idx_member (character_id),
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+    FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Team invitations (leader → player, GDD 2.9 组队机制)
+CREATE TABLE IF NOT EXISTS team_invitations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    team_id INT NOT NULL,
+    from_character_id INT NOT NULL,
+    to_character_id INT NOT NULL,
+    status ENUM('pending', 'accepted', 'rejected') NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_to_status (to_character_id, status),
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+    FOREIGN KEY (from_character_id) REFERENCES characters(id) ON DELETE CASCADE,
+    FOREIGN KEY (to_character_id) REFERENCES characters(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Team applications (player → team, GDD 2.9 组队机制)
+CREATE TABLE IF NOT EXISTS team_applications (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    team_id INT NOT NULL,
+    character_id INT NOT NULL,
+    message VARCHAR(100) NULL,
+    status ENUM('pending', 'accepted', 'rejected') NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_team_status (team_id, status),
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
+    FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

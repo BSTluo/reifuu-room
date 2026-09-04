@@ -19,6 +19,7 @@ import buildRouter from './routes/build.js';
 import chatRouter from './routes/chat.js';
 import friendsRouter from './routes/friends.js';
 import pigeonRouter from './routes/pigeon.js';
+import teamRouter from './routes/team.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -41,6 +42,7 @@ app.use('/build', buildRouter);
 app.use('/chat', chatRouter);
 app.use('/friends', friendsRouter);
 app.use('/pigeon', pigeonRouter);
+app.use('/team', teamRouter);
 
 app.use(errorHandler);
 

@@ -1,5 +1,5 @@
 import mitt from 'mitt'
-import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO } from '../api/types'
+import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO } from '../api/types'
 
 /**
  * Vue <-> Phaser 通信事件表。
@@ -109,6 +109,32 @@ export type GameEvents = {
   'pigeon:read-confirmed': { messageId: number; unreadCount: number }
   /** UI 请求打开飞鸽传信面板 */
   'ui:open-pigeon': void
+
+  // Team system (团队系统) events
+  /** 服务端下发团队完整状态 */
+  'team:state': TeamStateDTO
+  /** 收到团队邀请 */
+  'team:invite-received': { invitationId: number; teamId: number; teamName: string; fromNickname: string }
+  /** 收到申请通知（队长） */
+  'team:application-received': { applicationId: number; teamId: number; teamName: string; characterId: string; nickname: string; message: string | null }
+  /** 申请列表更新（队长） */
+  'team:applications': TeamApplicationDTO[]
+  /** 邀请列表更新 */
+  'team:invitations': TeamInvitationDTO[]
+  /** 申请加入成功 */
+  'team:applied': { teamId: number; teamName: string }
+  /** 新成员加入 */
+  'team:member-joined': { teamId: number; characterId: string; nickname: string }
+  /** 成员离开/被踢出 */
+  'team:member-left': { teamId: number; characterId: string; nickname: string }
+  /** 自己被踢出团队 */
+  'team:kicked': { teamId: number; teamName: string }
+  /** 团队已解散 */
+  'team:disbanded': { teamId: number; teamName: string }
+  /** 团队聊天消息 */
+  'team:chat-message': TeamChatMessageDTO
+  /** UI 请求打开团队面板 */
+  'ui:open-team': void
 }
 
 export const EventBus = mitt<GameEvents>()
