@@ -267,6 +267,32 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 
 ---
 
+## 6.8 ⭐ 飞鸽传信系统（GDD 2.7，✅ 前后端均已完成）
+
+### 6.8.1 数据库
+`pigeon_messages` 表（schema.sql 201-214 行）：`id / from_character_id / to_character_id / content VARCHAR(200) / status ENUM('sending','delivered','read') / deliver_at TIMESTAMP NULL / created_at`。
+⚠️ **旧库迁移**：内网库 `192.168.12.1` 上的 `pigeon_messages` 曾是旧结构（`sender_id/receiver_id/distance/calculated_delay/sent_at/delivered_at`），本次已按 schema.sql 结构重建（迁移脚本 `server/scripts/migrate-pigeon-table.ts`，旧数据已映射迁移：sender→from、receiver→to、delivered_at→deliver_at、status 按 delivered_at 是否为空推断）。
+
+### 6.8.2 后端
+- **Service**：`server/src/services/PigeonMailService.ts`——`sendMessage`（校验非本人/非空/≤200字/收件人存在；Redis 限流 3条/5分钟，key `pigeon:ratelimit:{characterId}`，超限 429）、`calcDelayMs`（Chebyshev 区块距离 ≤1 即时；同大洲 5 分钟；跨大洲 15 分钟——GDD 建议区间下限，传送门/NPC 航线未实现暂不区分交通档）、`getContinentOfChunk`（象限分四洲）、`getChunkId`（Redis 位置缓存优先 DB 兜底）、`getInbox/getSent`（JOIN 昵称，各取 50 封）、`getUnreadCount`、`markRead`（幂等，仅收件人）、`deliverDueMessages`（到期 sending → delivered，affectedRows 防并发，返回已送达数组）。
+- **REST**：`server/src/routes/pigeon.ts`（挂载 `/pigeon`）：`POST /pigeon/send`、`GET /pigeon/inbox`、`GET /pigeon/sent`、`POST /pigeon/:messageId/read`。
+- **Socket**（`server/src/socket.ts`）：C→S `pigeon:request-state` / `pigeon:send` / `pigeon:mark-read`；S→C `pigeon:state` / `pigeon:sent`（携带 delayMs）/ `pigeon:delivered`（即时送达或投递 tick 送达时推给在线收件人）/ `pigeon:read-confirmed`。
+- **投递 tick**：`initializeSocketIO` 内每 30s 调 `deliverDueMessages()`，送达后用 `getSocketForCharacter` 实时通知在线收件人。
+
+### 6.8.3 前端
+- **类型**：`api/types.ts` `PigeonMessageDTO` / `PigeonSendResultDTO`；`EventBus.ts` `pigeon:state / pigeon:sent / pigeon:delivered / pigeon:read-confirmed` 事件。
+- **SocketClient**：`pigeon:*` 事件接口 + EventBus 转发。
+- **Store**：`stores/pigeon.ts`（inbox/sent/unreadCount；`registerPigeonListeners()` 由 GameView 挂载时调用）。
+- **UI**：`components/game/HUD/PigeonMailPanel.vue`——收件/已发送双 tab、发送表单（角色ID+内容+字数计数 0/200）、状态徽章（传递中/已送达/已读）、点击已读、回复按钮；GameView 加 🕊️ 飞鸽传书 按钮（带未读角标）+ 新信 toast。
+
+### 6.8.4 验证方式（已通过 ✅）
+1. REST：`powershell -File server/scripts/test-pigeon.ps1`（登录 player_a/b → 发送/收件箱/已发送/标记已读/限流 429/自寄 400/超长 400/不存在收件人 404/未认证 401 全通过）。
+2. Socket：`server/scripts/test-pigeon-socket.ts`（需在 client 目录下能解析 socket.io-client 时运行）——双 socket 连接、pigeon:state、即时发送→双方事件、标记已读、错误路径均通过。
+3. 投递 tick：插入过期 sending 消息 → 30s 内被 tick 置为 delivered（服务端日志 `Pigeon delivery tick: 1 message(s) delivered`）。
+4. `server` 与 `client` 两端 `tsc --noEmit` / `vue-tsc --noEmit` 均通过。
+
+---
+
 ## 7. 测试账号（仍在数据库中）
 
 | 账号 | 密码 | 角色 | 出生区块 | 世界坐标 |
@@ -303,7 +329,7 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 - 小地图、资源节点/建造/聊天室前端交互 UI（**已补齐**：`WorldScene` 资源节点渲染 + `GameView` 背包/建造面板）。
 - ~~好友系统~~（**已完成** §6.7）；交通工具系统 / 传送门系统仍未实现（GDD Phase 3/4）。
 - 聊天室成员角色（房主/成员/访客）目前仅有房主 vs 访客二分，邀请制与成员管理未实现（见 §6.2）。
-- 飞鸽传信（pigeon_messages）仅建表，service/routes/UI 未实现（见 §6.7.1）。
+- ~~飞鸽传信~~（**已完成** §6.8）：仅建表 → 现 service/routes/socket/UI 均已实现并验证通过。
 - 数据库 `192.168.12.1` 是内网地址，换环境/远程时需改 `.env`（曾有短暂不可达导致 500）。
 - **表结构迁移注意**：`schema.sql` 用 `CREATE TABLE IF NOT EXISTS`，不会 ALTER 已存在的表。若在旧库上跑 schema，`map_chunks` / `resource_nodes` / `inventory_items` / `chat_rooms` 等新列需手动迁移或删表重建（本次交接中 `map_chunks` 因缺 `chunk_id/chunk_type/owner_id/is_public` 列已重建）。
 - **`/auth/login` 字段名**是 `usernameOrEmail`（不是 `username`），`/auth/register` 才是 `username`。API 响应格式 `{ status, data }` 或 `{ status, message }`。
@@ -318,6 +344,6 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 4. ~~进入聊天室实际使用~~（**已完成** §6）：点击房屋标记 → 进入房间 → 实时文字聊天，前后端 + 浏览器 UI 均验证通过。
 5. ~~聊天室进阶功能~~（**音乐/视频同步播放已完成** §6.5）：房间权限管理（成员角色/邀请制）、房间装饰系统待实现。
 6. **插件扩展**：当前内建 `music-sync` / `video-sync` 两个插件，新增插件只需：①在 `plugins.ts` 注册（id/name/icon/component）②在服务端 `socket.ts` 的 `allowedPlugins` 数组加 id ③编写插件 Vue 组件（props: `roomId`，emit: `close`）。
-7. ~~规划 Phase 3（好友/社交、传送门）~~（**好友系统已完成** §6.7）与 Phase 4（交通工具）。剩余 Phase 3：传送门系统、飞鸽传信（pigeon_messages 表已建）。
+7. ~~规划 Phase 3（好友/社交、传送门）~~（**好友系统已完成** §6.7，**飞鸽传信已完成** §6.8）与 Phase 4（交通工具）。剩余 Phase 3：传送门系统。
 8. 建议为前端新增 UI/UX 专职成员补齐界面质感（该角色上一团队已移除）。
 9. 前端接入正式美术资源时替换 `PreloadScene` 的 Graphics 生成贴图（贴图 key 不变即可平滑替换）。

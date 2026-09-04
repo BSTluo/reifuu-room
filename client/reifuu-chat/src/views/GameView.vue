@@ -12,10 +12,12 @@ import { useRoomStore } from '../stores/room'
 import ChatPanel from '../components/game/HUD/ChatPanel.vue'
 import FriendListPanel from '../components/game/HUD/FriendListPanel.vue'
 import MailboxPanel from '../components/game/HUD/MailboxPanel.vue'
+import PigeonMailPanel from '../components/game/HUD/PigeonMailPanel.vue'
 import PlayerInfoCard from '../components/game/HUD/PlayerInfoCard.vue'
 import { apiGet, apiPost, ApiRequestError } from '../api/http'
 import type { BuildTemplateDTO, OwnedChunkDTO } from '../api/types'
 import { registerFriendListeners, useFriendStore } from '../stores/friend'
+import { registerPigeonListeners, usePigeonStore } from '../stores/pigeon'
 
 const userStore = useUserStore()
 const explorationStore = useExplorationStore()
@@ -23,6 +25,7 @@ const characterStore = useCharacterStore()
 const inventoryStore = useInventoryStore()
 const roomStore = useRoomStore()
 const friendStore = useFriendStore()
+const pigeonStore = usePigeonStore()
 
 const phaserReady = ref(false)
 const lastPosition = ref({ x: 0, y: 0 })
@@ -31,6 +34,7 @@ const socketStatus = ref<'idle' | 'connected' | 'disconnected' | 'error'>('idle'
 // ---- 好友 / 信箱 ----
 const showFriends = ref(false)
 const showMailbox = ref(false)
+const showPigeon = ref(false)
 const selectedPlayer = ref<{ characterId: string; nickname: string } | null>(null)
 
 // ---- 背包 / 建造 ----
@@ -172,6 +176,10 @@ function onFriendTeleportConfirmed(payload: { nickname: string }) {
   onToast({ message: `已传送到 ${payload.nickname} 身边！`, type: 'success' })
 }
 
+function onPigeonDelivered(payload: { fromNickname: string }) {
+  onToast({ message: `🕊️ 收到 ${payload.fromNickname} 的飞鸽传信！`, type: 'success' })
+}
+
 const toast = ref<{ text: string; type: string } | null>(null)
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -212,9 +220,12 @@ onMounted(() => {
   EventBus.on('ui:show-player-info', onShowPlayerInfo)
   EventBus.on('friend:request-received', onFriendRequestReceived)
   EventBus.on('friend:teleport-confirmed', onFriendTeleportConfirmed)
+  EventBus.on('pigeon:delivered', onPigeonDelivered)
 
   // 注册好友 store 的 EventBus 监听
   registerFriendListeners()
+  // 注册飞鸽传信 store 的 EventBus 监听
+  registerPigeonListeners()
 
   // 迷雾 store 先在 socket 建立前监听，确保不遗漏 map:initial-explored / map:explore 事件
   explorationStore.startListening()
@@ -241,6 +252,7 @@ onBeforeUnmount(() => {
   EventBus.off('ui:show-player-info', onShowPlayerInfo)
   EventBus.off('friend:request-received', onFriendRequestReceived)
   EventBus.off('friend:teleport-confirmed', onFriendTeleportConfirmed)
+  EventBus.off('pigeon:delivered', onPigeonDelivered)
   if (toastTimer) clearTimeout(toastTimer)
   explorationStore.stopListening()
   socketClient.disconnect()
@@ -288,6 +300,14 @@ onBeforeUnmount(() => {
         >
           📬 信箱
           <span v-if="friendStore.unreadRequestCount > 0" class="mail-badge">{{ friendStore.unreadRequestCount }}</span>
+        </button>
+        <button
+          class="action-btn"
+          :class="{ 'has-badge': pigeonStore.unreadCount > 0 }"
+          @click="showPigeon = !showPigeon"
+        >
+          🕊️ 飞鸽传书
+          <span v-if="pigeonStore.unreadCount > 0" class="mail-badge">{{ pigeonStore.unreadCount }}</span>
         </button>
       </div>
 
@@ -360,6 +380,10 @@ onBeforeUnmount(() => {
 
       <div v-if="showMailbox" class="panel">
         <MailboxPanel />
+      </div>
+
+      <div v-if="showPigeon" class="panel">
+        <PigeonMailPanel />
       </div>
     </div>
 

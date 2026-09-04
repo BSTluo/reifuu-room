@@ -1,6 +1,6 @@
 import { io, Socket } from 'socket.io-client'
 import { EventBus } from '../EventBus'
-import type { FriendListItemDTO, FriendRequestDTO } from '../../api/types'
+import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO } from '../../api/types'
 
 export interface ServerToClientEvents {
   echo: (payload: unknown) => void
@@ -35,6 +35,11 @@ export interface ServerToClientEvents {
   'friend:rejected': (data: { requestId: number }) => void
   'friend:removed': (data: { characterId: string }) => void
   'friend:teleport-confirmed': (data: { characterId: string; nickname: string; position: { x: number; y: number }; chunkId: string }) => void
+  // Pigeon mail events (server -> client)
+  'pigeon:state': (data: { messages: PigeonMessageDTO[]; unreadCount: number }) => void
+  'pigeon:sent': (data: { messageId: number; toCharacterId: string; toNickname: string; delayMs: number; delivered: boolean }) => void
+  'pigeon:delivered': (data: { messageId: number; fromCharacterId: string; fromNickname: string; content: string; createdAt: string }) => void
+  'pigeon:read-confirmed': (data: { messageId: number; unreadCount: number }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -57,6 +62,10 @@ export interface ClientToServerEvents {
   'friend:reject-request': (data: { requestId: number }) => void
   'friend:remove': (data: { characterId: string }) => void
   'friend:teleport': (data: { characterId: string }) => void
+  // Pigeon mail events (client -> server)
+  'pigeon:request-state': () => void
+  'pigeon:send': (data: { toCharacterId: string; content: string }) => void
+  'pigeon:mark-read': (data: { messageId: number }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -164,6 +173,20 @@ class SocketClient {
     })
     this.socket.on('friend:teleport-confirmed', (data: { characterId: string; nickname: string; position: { x: number; y: number }; chunkId: string }) => {
       EventBus.emit('friend:teleport-confirmed', data)
+    })
+
+    // Pigeon mail events: forward to EventBus for the pigeon store / UI
+    this.socket.on('pigeon:state', (data: { messages: PigeonMessageDTO[]; unreadCount: number }) => {
+      EventBus.emit('pigeon:state', data)
+    })
+    this.socket.on('pigeon:sent', (data: { messageId: number; toCharacterId: string; toNickname: string; delayMs: number; delivered: boolean }) => {
+      EventBus.emit('pigeon:sent', data)
+    })
+    this.socket.on('pigeon:delivered', (data: { messageId: number; fromCharacterId: string; fromNickname: string; content: string; createdAt: string }) => {
+      EventBus.emit('pigeon:delivered', data)
+    })
+    this.socket.on('pigeon:read-confirmed', (data: { messageId: number; unreadCount: number }) => {
+      EventBus.emit('pigeon:read-confirmed', data)
     })
 
     this.socket.on('disconnect', (reason) => {

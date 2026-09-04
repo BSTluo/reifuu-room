@@ -1,5 +1,5 @@
 import mitt from 'mitt'
-import type { FriendListItemDTO, FriendRequestDTO } from '../api/types'
+import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO } from '../api/types'
 
 /**
  * Vue <-> Phaser 通信事件表。
@@ -97,6 +97,18 @@ export type GameEvents = {
   'ui:open-mailbox': void
   /** 点击其他玩家 → 显示信息卡（含加好友按钮） */
   'ui:show-player-info': { characterId: string; nickname: string }
+
+  // Pigeon mail (飞鸽传信) events
+  /** 服务端下发信箱状态（收件箱 + 未读数） */
+  'pigeon:state': { messages: PigeonMessageDTO[]; unreadCount: number }
+  /** 发送成功（携带延迟信息） */
+  'pigeon:sent': { messageId: number; toCharacterId: string; toNickname: string; delayMs: number; delivered: boolean }
+  /** 收到新信件（即时送达或投递周期送达） */
+  'pigeon:delivered': { messageId: number; fromCharacterId: string; fromNickname: string; content: string; createdAt: string }
+  /** 标记已读成功（未读数更新） */
+  'pigeon:read-confirmed': { messageId: number; unreadCount: number }
+  /** UI 请求打开飞鸽传信面板 */
+  'ui:open-pigeon': void
 }
 
 export const EventBus = mitt<GameEvents>()

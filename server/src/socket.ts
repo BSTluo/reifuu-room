@@ -12,6 +12,7 @@ import ChatMessageService from './services/ChatMessageService.js';
 import PluginService from './services/PluginService.js';
 import BuildService from './services/BuildService.js';
 import FriendService from './services/FriendService.js';
+import PigeonMailService from './services/PigeonMailService.js';
 import { query } from './db/mysql.js';
 
 /**
@@ -600,6 +601,80 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       }
     });
 
+    // ---- Pigeon mail (飞鸽传信, GDD 2.7) ----
+    // Client asks for its current pigeon mail state (inbox + unread count).
+    // Sent by the pigeon panel when it opens.
+    socket.on('pigeon:request-state', async () => {
+      if (!character) return;
+      try {
+        const messages = await PigeonMailService.getInbox(character.id);
+        const unreadCount = await PigeonMailService.getUnreadCount(character.id);
+        socket.emit('pigeon:state', { messages, unreadCount });
+      } catch (error: any) {
+        logger.error('Pigeon state error', error);
+        socket.emit('error', { message: error.message || 'Failed to load pigeon mail' });
+      }
+    });
+
+    // Send a pigeon message. On success the sender gets 'pigeon:sent' with the
+    // calculated delay; if the message is instant AND the recipient is online,
+    // they get an immediate 'pigeon:delivered' notification.
+    socket.on(
+      'pigeon:send',
+      async (data: { toCharacterId: string; content: string }) => {
+        if (!character) {
+          socket.emit('error', { message: 'No character found' });
+          return;
+        }
+        try {
+          const result = await PigeonMailService.sendMessage(
+            character.id,
+            String(data?.toCharacterId ?? ''),
+            String(data?.content ?? '')
+          );
+          socket.emit('pigeon:sent', {
+            messageId: result.messageId,
+            toCharacterId: String(data?.toCharacterId),
+            toNickname: result.toNickname,
+            delayMs: result.delayMs,
+            delivered: result.delivered,
+          });
+          // Instant delivery → notify an online recipient right away
+          if (result.delivered) {
+            const targetSocket = getSocketForCharacter(io, String(data?.toCharacterId));
+            if (targetSocket) {
+              targetSocket.emit('pigeon:delivered', {
+                messageId: result.messageId,
+                fromCharacterId: character.id,
+                fromNickname: character.nickname,
+                content: String(data?.content ?? '').trim(),
+                createdAt: new Date().toISOString(),
+              });
+            }
+          }
+        } catch (error: any) {
+          logger.error('Pigeon send error', error);
+          socket.emit('error', { message: error.message || 'Failed to send pigeon mail' });
+        }
+      }
+    );
+
+    // Mark a received message as read (recipient only)
+    socket.on('pigeon:mark-read', async (data: { messageId: number }) => {
+      if (!character) return;
+      try {
+        await PigeonMailService.markRead(Number(data?.messageId), character.id);
+        const unreadCount = await PigeonMailService.getUnreadCount(character.id);
+        socket.emit('pigeon:read-confirmed', {
+          messageId: Number(data?.messageId),
+          unreadCount,
+        });
+      } catch (error: any) {
+        logger.error('Pigeon mark-read error', error);
+        socket.emit('error', { message: error.message || 'Failed to mark message read' });
+      }
+    });
+
     // ---- Disconnect handler ----
     socket.on('disconnect', (reason) => {
       logger.info(`Client disconnected: ${user?.username} (${socket.id}), reason: ${reason}`);
@@ -689,6 +764,28 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       });
     }
   });
+
+  // ---- Pigeon mail delivery tick ----
+  // Periodically promote due "sending" messages to "delivered" and notify
+  // online recipients in real time (GDD 2.7 飞鸽传信).
+  setInterval(() => {
+    PigeonMailService.deliverDueMessages()
+      .then((delivered) => {
+        for (const msg of delivered) {
+          const targetSocket = getSocketForCharacter(io, msg.toCharacterId);
+          if (targetSocket) {
+            targetSocket.emit('pigeon:delivered', {
+              messageId: msg.id,
+              fromCharacterId: msg.fromCharacterId,
+              fromNickname: msg.fromNickname,
+              content: msg.content,
+              createdAt: msg.createdAt,
+            });
+          }
+        }
+      })
+      .catch((err) => logger.error('Pigeon delivery tick failed', err));
+  }, 30_000);
 
   return io;
 };

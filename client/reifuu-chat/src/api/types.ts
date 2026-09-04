@@ -123,3 +123,26 @@ export interface FriendTeleportResultDTO {
   position: { x: number; y: number }
   chunkId: string
 }
+
+// ---- Pigeon mail (飞鸽传信) DTOs ----
+
+export type PigeonMessageStatus = 'sending' | 'delivered' | 'read'
+
+export interface PigeonMessageDTO {
+  id: number
+  fromCharacterId: string
+  fromNickname: string
+  toCharacterId: string
+  toNickname: string
+  content: string
+  status: PigeonMessageStatus
+  deliverAt: string | null
+  createdAt: string
+}
+
+export interface PigeonSendResultDTO {
+  messageId: number
+  toNickname: string
+  delayMs: number
+  delivered: boolean
+}
