@@ -29,6 +29,7 @@ function formatTime(iso: string): string {
 function typeLabel(type: MailboxMessageType): string {
   if (type === 'friend_request') return '好友请求'
   if (type === 'system') return '系统'
+  if (type === 'chat') return '好友消息'
   return '消息'
 }
 
@@ -89,6 +90,7 @@ onBeforeUnmount(() => {
     <div class="tabs">
       <button :class="{ active: activeTab === 'all' }" @click="activeTab = 'all'">全部</button>
       <button :class="{ active: activeTab === 'friend_request' }" @click="activeTab = 'friend_request'">好友请求</button>
+      <button :class="{ active: activeTab === 'chat' }" @click="activeTab = 'chat'">好友消息</button>
       <button :class="{ active: activeTab === 'system' }" @click="activeTab = 'system'">系统</button>
     </div>
 

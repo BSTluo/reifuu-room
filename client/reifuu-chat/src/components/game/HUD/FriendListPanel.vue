@@ -45,6 +45,13 @@ function teleportToFriend(friend: FriendDTO) {
   setTimeout(() => teleportingIds.value.delete(friend.characterId), 2000)
 }
 
+function openPrivateChat(friend: FriendDTO) {
+  EventBus.emit('ui:open-private-chat', {
+    characterId: friend.characterId,
+    nickname: friend.nickname,
+  })
+}
+
 function onOnlineStatus(payload: { characterId: number; isOnline: boolean }) {
   friendStore.updateOnlineStatus(payload.characterId, payload.isOnline)
 }
@@ -75,6 +82,7 @@ onBeforeUnmount(() => {
           </span>
         </div>
         <span class="since">{{ formatSince(friend.friendSince) }}</span>
+        <button class="msg-btn" @click="openPrivateChat(friend)">消息</button>
         <button
           v-if="friend.isOnline"
           class="teleport-btn"
@@ -191,6 +199,18 @@ onBeforeUnmount(() => {
 .teleport-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.msg-btn {
+  padding: 4px 8px;
+  background: #2c3c2c;
+  color: #a0d0a0;
+  border: 1px solid #3c5c3c;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.msg-btn:hover {
+  background: #3c503c;
 }
 .empty {
   margin: 0;

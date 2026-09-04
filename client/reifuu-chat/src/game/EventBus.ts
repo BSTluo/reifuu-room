@@ -1,4 +1,5 @@
 import mitt from 'mitt'
+import type { PrivateMessagePayload } from './network/SocketClient'
 
 /**
  * Vue <-> Phaser 通信事件表。
@@ -92,6 +93,16 @@ export type GameEvents = {
   'friend:teleport-confirmed': { position: { x: number; y: number }; chunkId: string; friendNickname: string | null; cooldownRemaining: number }
   /** UI 请求传送到好友位置 */
   'ui:teleport-friend': { characterId: number }
+
+  // Friend private chat (GDD §2.7 好友私聊频道)
+  /** 收到好友私聊消息（实时推送） */
+  'friend:message-received': { message: PrivateMessagePayload }
+  /** 私聊消息发送成功（本客户端确认） */
+  'friend:message-sent': { message: PrivateMessagePayload }
+  /** UI 请求打开与某好友的私聊窗口 */
+  'ui:open-private-chat': { characterId: number; nickname: string }
+  /** UI 请求关闭私聊窗口 */
+  'ui:close-private-chat': void
 }
 
 export const EventBus = mitt<GameEvents>()

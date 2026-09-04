@@ -133,3 +133,14 @@ export interface MailboxMessageDTO {
   isRead: boolean
   createdAt: string
 }
+
+/** 好友私聊消息 (GDD §2.7 好友私聊频道) */
+export interface PrivateMessageDTO {
+  id: number
+  senderId: number
+  receiverId: number
+  senderNickname: string
+  content: { text: string }
+  isRead: boolean
+  createdAt: string
+}

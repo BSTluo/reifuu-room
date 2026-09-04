@@ -13,6 +13,7 @@ import ChatPanel from '../components/game/HUD/ChatPanel.vue'
 import FriendListPanel from '../components/game/HUD/FriendListPanel.vue'
 import MailboxPanel from '../components/game/HUD/MailboxPanel.vue'
 import PlayerInfoCard from '../components/game/HUD/PlayerInfoCard.vue'
+import PrivateChatPanel from '../components/game/HUD/PrivateChatPanel.vue'
 import { useFriendStore } from '../stores/friend'
 import { apiGet, apiPost, ApiRequestError } from '../api/http'
 import type { BuildTemplateDTO, OwnedChunkDTO } from '../api/types'
@@ -148,6 +149,10 @@ function onToast(payload: { message: string; type?: 'info' | 'warn' | 'error' | 
   }, 2000)
 }
 
+function showToast(message: string, type: 'info' | 'warn' | 'error' | 'success' = 'info') {
+  onToast({ message, type })
+}
+
 // ---- 聊天室 ----
 function onEnterRoom(payload: { roomId: string }) {
   roomStore.enterRoom(payload.roomId)
@@ -172,6 +177,24 @@ function onFriendOnlineStatus(payload: { characterId: number; isOnline: boolean 
 
 function onTeleportFriend(payload: { characterId: number }) {
   socketClient.emit('friend:teleport', { toCharacterId: payload.characterId })
+}
+
+// ---- 好友私聊 ----
+function onOpenPrivateChat(payload: { characterId: number; nickname: string }) {
+  friendStore.openPrivateChat(payload.characterId, payload.nickname)
+}
+
+function onPrivateMessageReceived(payload: { message: { senderId: number; senderNickname: string; content: { text: string } } }) {
+  friendStore.appendPrivateMessage(payload.message as any)
+  // 若当前未打开与该好友的私聊窗口，toast 提醒
+  if (friendStore.privateChatFriendId !== payload.message.senderId) {
+    showToast(`好友 ${payload.message.senderNickname} 发来私聊：${payload.message.content?.text ?? ''}`, 'info')
+    friendStore.fetchUnreadCount()
+  }
+}
+
+function onPrivateMessageSent(payload: { message: any }) {
+  friendStore.appendPrivateMessage(payload.message)
 }
 
 const toast = ref<{ text: string; type: string } | null>(null)
@@ -216,6 +239,9 @@ onMounted(() => {
   EventBus.on('friend:request-result', onFriendRequestResult)
   EventBus.on('friend:online-status', onFriendOnlineStatus)
   EventBus.on('ui:teleport-friend', onTeleportFriend)
+  EventBus.on('ui:open-private-chat', onOpenPrivateChat)
+  EventBus.on('friend:message-received', onPrivateMessageReceived)
+  EventBus.on('friend:message-sent', onPrivateMessageSent)
 
   // 迷雾 store 先在 socket 建立前监听，确保不遗漏 map:initial-explored / map:explore 事件
   explorationStore.startListening()
@@ -249,6 +275,9 @@ onBeforeUnmount(() => {
   EventBus.off('friend:request-result', onFriendRequestResult)
   EventBus.off('friend:online-status', onFriendOnlineStatus)
   EventBus.off('ui:teleport-friend', onTeleportFriend)
+  EventBus.off('ui:open-private-chat', onOpenPrivateChat)
+  EventBus.off('friend:message-received', onPrivateMessageReceived)
+  EventBus.off('friend:message-sent', onPrivateMessageSent)
   if (toastTimer) clearTimeout(toastTimer)
   explorationStore.stopListening()
   socketClient.disconnect()
@@ -305,6 +334,10 @@ onBeforeUnmount(() => {
 
       <div v-if="roomStore.inRoom" class="panel chat-panel-wrap">
         <ChatPanel />
+      </div>
+
+      <div v-if="friendStore.privateChatFriendId" class="panel chat-panel-wrap">
+        <PrivateChatPanel />
       </div>
 
       <div v-if="showInventory" class="panel">

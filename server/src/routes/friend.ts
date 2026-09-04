@@ -152,4 +152,37 @@ router.get('/mailbox/unread-count', async (req: Request, res: Response, next: Ne
   }
 });
 
+// ==================== 好友私聊（GDD §2.7） ====================
+
+// GET /friend/messages/:characterId —— 获取与某好友的私聊历史
+router.get('/messages/:characterId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const character = await requireCharacter(req);
+    const friendCharacterId = parseInt(String(req.params.characterId), 10);
+    if (!Number.isFinite(friendCharacterId)) throw new AppError('Invalid characterId', 400);
+
+    const messages = await FriendService.getPrivateMessages(
+      Number(character.id),
+      friendCharacterId
+    );
+    res.json({ status: 'success', data: { messages } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /friend/messages/:characterId/read —— 标记与某好友的私聊为已读
+router.post('/messages/:characterId/read', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const character = await requireCharacter(req);
+    const friendCharacterId = parseInt(String(req.params.characterId), 10);
+    if (!Number.isFinite(friendCharacterId)) throw new AppError('Invalid characterId', 400);
+
+    await FriendService.markConversationRead(Number(character.id), friendCharacterId);
+    res.json({ status: 'success', message: 'Conversation marked as read' });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;

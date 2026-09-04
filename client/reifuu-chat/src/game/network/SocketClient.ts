@@ -33,7 +33,20 @@ export interface ServerToClientEvents {
   'friend:responded': (data: { result: { status: 'accepted' | 'rejected'; fromCharacterId: number; toCharacterId: number } }) => void
   'friend:online-status': (data: { characterId: number; isOnline: boolean }) => void
   'friend:teleport-confirmed': (data: { position: { x: number; y: number }; chunkId: string; friendNickname: string | null; cooldownRemaining: number }) => void
+  // Friend private chat (server -> client)
+  'friend:message-received': (data: { message: PrivateMessagePayload }) => void
+  'friend:message-sent': (data: { message: PrivateMessagePayload }) => void
   [event: string]: (...args: any[]) => void
+}
+
+export interface PrivateMessagePayload {
+  id: number
+  senderId: number
+  receiverId: number
+  senderNickname: string
+  content: { text: string }
+  isRead: boolean
+  createdAt: string
 }
 
 export interface ClientToServerEvents {
@@ -52,6 +65,7 @@ export interface ClientToServerEvents {
   'friend:send-request': (data: { toCharacterId: number; message?: string }) => void
   'friend:respond': (data: { requestId: number; accept: boolean }) => void
   'friend:teleport': (data: { toCharacterId: number }) => void
+  'friend:send-message': (data: { toCharacterId: number; content: string }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -156,6 +170,12 @@ class SocketClient {
     })
     this.socket.on('friend:teleport-confirmed', (data: { position: { x: number; y: number }; chunkId: string; friendNickname: string | null; cooldownRemaining: number }) => {
       EventBus.emit('friend:teleport-confirmed', data)
+    })
+    this.socket.on('friend:message-received', (data: { message: PrivateMessagePayload }) => {
+      EventBus.emit('friend:message-received', data)
+    })
+    this.socket.on('friend:message-sent', (data: { message: PrivateMessagePayload }) => {
+      EventBus.emit('friend:message-sent', data)
     })
 
     this.socket.on('disconnect', (reason) => {

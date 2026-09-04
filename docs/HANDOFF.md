@@ -214,7 +214,7 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 
 ## 8. ⭐ 好友系统（GDD §2.7，✅ 前后端均已完成）
 
-**任务状态**：已完成。支持好友申请（附留言）、接受/拒绝、好友列表（在线状态）、删除好友、信箱（好友申请/系统消息）、未读数、**好友传送**（5 分钟冷却）。端到端 E2E 测试：好友核心 37/37 + 好友传送 25/25 全通过（2026-09-04）。
+**任务状态**：已完成。支持好友申请（附留言）、接受/拒绝、好友列表（在线状态）、删除好友、信箱（好友申请/系统消息）、未读数、**好友传送**（5 分钟冷却）、**好友私聊频道**。端到端 E2E 测试：好友核心 37/37 + 好友传送 25/25 + 好友私聊 24/24 全通过（2026-09-04）。
 
 ### 8.1 数据库
 - **迁移脚本 `server/add_friend_system.sql`**（已执行）：3 张新表，`schema.sql` 同步更新：
@@ -254,8 +254,23 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 - **前端**：`FriendListPanel.vue` 在线好友显示「传送」按钮 → `ui:teleport-friend` 事件 → `GameView` 转发 socket `friend:teleport` → `WorldScene.onTeleportConfirmed` 更新玩家精灵位置/区块/迷雾 + `game:toast` 提示。
 - **验证**：E2E 25/25 通过 —— 非好友(404)/好友离线(400)/建好友/传送成功(位置+chunk+好友昵称+cooldown)/DB 位置更新/冷却期 429/socket 传送冷却报错/清冷却后 socket 传送成功/落点不重叠且距离≤2.83/冷却 key TTL=300。
 
-### 8.5 未实现（后续 Phase 3）
-- 飞鸽传书（跨区块/离线留言，按距离延迟送达）、隐身模式、拉黑（Phase 5）、好友私聊频道。
+### 8.5 好友私聊频道（GDD §2.7 私聊，✅ 已完成）
+- **服务 `FriendService`**（“好友私聊（GDD §2.7）”小节）：
+  - `sendPrivateMessage(fromCharacterId, toCharacterId, content)`：校验非空/trim ≤200 字(400) → 好友关系(404) → 取发送者昵称 → 写 `messages`（`type='chat'`，`content JSON {text}`）→ 返回 `{id, senderId, receiverId, content, createdAt}`。
+  - `getPrivateMessages(characterId, friendCharacterId)`：双向查询 `WHERE type='chat' AND ((sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?))`，`ORDER BY m.created_at DESC, m.id DESC LIMIT 100`（**必须加 `m.id DESC` 兜底**，否则同秒消息排序不稳定），JS `.reverse()` 转正序返回，join 发送者昵称。
+  - `markConversationRead(characterId, friendCharacterId)`：`UPDATE is_read=TRUE WHERE type='chat' AND receiver_id=me AND sender_id=friend`。
+- **REST**：`GET /friend/messages/:characterId`（历史，正序）、`POST /friend/messages/:characterId/read`（标记已读）。
+- **Socket**：`friend:send-message` handler → 服务层校验通过后 `io.to('character:'+targetId).emit('friend:message-received',{message})`（跨区块即时送达，复用 §8.2 的按角色房间）+ `socket.emit('friend:message-sent',{message})`；错误走 socket `error` 事件。
+- **前端**：
+  - `SocketClient.ts`/`EventBus.ts` 新增 `PrivateMessagePayload` 与 `friend:message-received`/`friend:message-sent`/`ui:open-private-chat`/`ui:close-private-chat` 事件。
+  - `stores/friend.ts`：`privateMessages`/`privateChatFriendId`/`privateChatFriendNickname` 状态 + `fetchPrivateMessages`/`appendPrivateMessage`（按 id 去重，peerId 用 `message.senderId === myCharacterId ? receiverId : senderId` 解析，myCharacterId 来自 characterStore 需 `Number()`）/`markConversationRead`/`openPrivateChat`/`closePrivateChat`。
+  - `PrivateChatPanel.vue`（新）：好友名 + 关闭、消息列表（自己/对方左右样式 + 时间）、输入框（Enter 发送、maxlength 200）、watch `privateChatFriendId`（immediate）拉历史 + 标记已读 + 滚动到底。
+  - `FriendListPanel.vue` 好友行加「消息」按钮（离线也可发）→ `ui:open-private-chat`；`MailboxPanel.vue` 新增「好友消息」tab（`typeLabel` chat→好友消息）。
+  - `GameView.vue`：注册/转发上述事件，收到 `friend:message-received` 时若非当前聊天窗口则 toast + 刷新未读数。
+- **验证**：E2E 24/24 通过 —— 非好友(404)/空内容(400)/超长(400)/发送成功(DB 落库+content JSON)/历史正序/双向可见/标记已读(仅 receiver 侧 is_read)/socket 实时送达(跨区块)/socket 发送确认/发送者视角 is_read=false。
+
+### 8.6 未实现（后续 Phase 3）
+- 飞鸽传书（跨区块/离线留言，按距离延迟送达）、隐身模式、拉黑（Phase 5）。
 
 ---
 
@@ -308,7 +323,7 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 3. ~~复核现有 API 的前端对接~~（**已完成**：资源采集/建造/背包/聊天室均已端到端联通并 REST 验证通过）。
 4. ~~进入聊天室实际使用~~（**已完成** §6）：点击房屋标记 → 进入房间 → 实时文字聊天，前后端 + 浏览器 UI 均验证通过。
 5. **聊天室进阶功能**：房间权限管理（成员角色/邀请制）、音乐/视频同步播放、房间装饰系统。
-6. ~~好友系统核心~~（**已完成** §8）。Phase 3 剩余：好友传送（冷却 5-10min）、飞鸽传书（跨区块延迟留言）、隐身模式、传送门。
+6. ~~好友系统核心~~（**已完成** §8）。Phase 3 剩余：好友传送（✅ 已完成）、好友私聊（✅ 已完成）、飞鸽传书（跨区块延迟留言）、隐身模式、传送门。
 7. 规划 Phase 4（交通工具）。
 8. 建议为前端新增 UI/UX 专职成员补齐界面质感（该角色上一团队已移除）。
 9. 前端接入正式美术资源时替换 `PreloadScene` 的 Graphics 生成贴图（贴图 key 不变即可平滑替换）。

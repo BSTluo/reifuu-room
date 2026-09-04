@@ -549,6 +549,32 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       }
     });
 
+    // ---- 好友私聊（GDD §2.7） ----
+    socket.on('friend:send-message', async (data: { toCharacterId: number; content: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const message = await FriendService.sendPrivateMessage(
+          Number(character.id),
+          Number(data?.toCharacterId),
+          String(data?.content ?? '')
+        );
+
+        // 实时转发给接收者（同区块/跨区块在线均即时送达）
+        io.to(`character:${data.toCharacterId}`).emit('friend:message-received', {
+          message,
+        });
+
+        // 回执给发送者
+        socket.emit('friend:message-sent', { message });
+      } catch (error: any) {
+        logger.error('Friend private message error', error);
+        socket.emit('error', { message: error.message || 'Failed to send message' });
+      }
+    });
+
     // ---- Disconnect handler ----
     socket.on('disconnect', (reason) => {
       logger.info(`Client disconnected: ${user?.username} (${socket.id}), reason: ${reason}`);

@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { apiGet, apiPost, apiDelete, ApiRequestError } from '../api/http'
-import type { FriendDTO, FriendRequestDTO, MailboxMessageDTO, MailboxMessageType } from '../api/types'
+import type { FriendDTO, FriendRequestDTO, MailboxMessageDTO, MailboxMessageType, PrivateMessageDTO } from '../api/types'
 import { useUserStore } from './user'
+import { useCharacterStore } from './character'
 
 interface FriendState {
   friends: FriendDTO[]
@@ -9,6 +10,12 @@ interface FriendState {
   mailbox: MailboxMessageDTO[]
   unreadCount: number
   loading: boolean
+  /** 私聊消息缓存：key = friendCharacterId, value = messages (正序) */
+  privateMessages: Record<number, PrivateMessageDTO[]>
+  /** 当前私聊窗口对端 characterId */
+  privateChatFriendId: number | null
+  /** 当前私聊窗口对端昵称 */
+  privateChatFriendNickname: string | null
 }
 
 export const useFriendStore = defineStore('friend', {
@@ -18,6 +25,9 @@ export const useFriendStore = defineStore('friend', {
     mailbox: [],
     unreadCount: 0,
     loading: false,
+    privateMessages: {},
+    privateChatFriendId: null,
+    privateChatFriendNickname: null,
   }),
   actions: {
     async fetchFriends(): Promise<void> {
@@ -117,11 +127,65 @@ export const useFriendStore = defineStore('friend', {
       this.fetchFriends()
       this.fetchUnreadCount()
     },
+    /** 获取与某好友的私聊历史 */
+    async fetchPrivateMessages(friendCharacterId: number): Promise<void> {
+      const userStore = useUserStore()
+      try {
+        const data = await apiGet<{ messages: PrivateMessageDTO[] }>(
+          `/friend/messages/${friendCharacterId}`,
+          userStore.accessToken ?? undefined
+        )
+        this.privateMessages[friendCharacterId] = data.messages ?? []
+      } catch (err) {
+        console.warn('fetch private messages failed', err)
+      }
+    },
+    /** 追加一条私聊消息到缓存（来自 socket 实时推送或发送回执） */
+    appendPrivateMessage(message: PrivateMessageDTO): void {
+      // 找到会话对端：若消息是发给我的，对端是 senderId；若是我发的，对端是 receiverId
+      const characterStore = useCharacterStore()
+      const myCharacterId = Number(characterStore.characterId ?? 0)
+      const peerId = message.senderId === myCharacterId ? message.receiverId : message.senderId
+      if (!this.privateMessages[peerId]) this.privateMessages[peerId] = []
+      const list = this.privateMessages[peerId]
+      if (!list.some((m) => m.id === message.id)) {
+        list.push(message)
+        list.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+      }
+    },
+    /** 打开与某好友的私聊窗口 */
+    openPrivateChat(characterId: number, nickname: string): void {
+      this.privateChatFriendId = characterId
+      this.privateChatFriendNickname = nickname
+    },
+    /** 关闭私聊窗口 */
+    closePrivateChat(): void {
+      this.privateChatFriendId = null
+      this.privateChatFriendNickname = null
+    },
+    /** 标记与某好友的私聊为已读 */
+    async markConversationRead(friendCharacterId: number): Promise<void> {
+      const userStore = useUserStore()
+      try {
+        await apiPost(
+          `/friend/messages/${friendCharacterId}/read`,
+          {},
+          userStore.accessToken ?? undefined
+        )
+        const list = this.privateMessages[friendCharacterId]
+        if (list) list.forEach((m) => (m.isRead = true))
+      } catch (err) {
+        console.warn('mark conversation read failed', err)
+      }
+    },
     reset() {
       this.friends = []
       this.pendingRequests = []
       this.mailbox = []
       this.unreadCount = 0
+      this.privateMessages = {}
+      this.privateChatFriendId = null
+      this.privateChatFriendNickname = null
     },
   },
 })

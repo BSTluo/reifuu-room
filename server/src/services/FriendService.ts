@@ -37,6 +37,17 @@ export interface MailboxMessageInfo {
   createdAt: string;
 }
 
+/** 好友私聊消息（GDD §2.7 好友私聊频道） */
+export interface PrivateMessageInfo {
+  id: number;
+  senderId: number;
+  receiverId: number;
+  senderNickname: string;
+  content: { text: string };
+  isRead: boolean;
+  createdAt: string;
+}
+
 /** 在线角色集合的 Redis key（服务端内部使用，需自行加 prefixKey） */
 const ONLINE_CHARACTERS_KEY = 'online:characters';
 
@@ -435,6 +446,104 @@ export class FriendService {
       [characterId]
     );
     return Number(rows[0]?.cnt ?? 0);
+  }
+
+  // ==================== 好友私聊（GDD §2.7） ====================
+
+  /**
+   * 发送私聊消息。
+   * 校验：好友关系、内容非空且 ≤200 字。
+   * 写入 messages 表 type='chat'，receiver_id=接收者, sender_id=发送者。
+   * 返回创建的消息记录（含 id、createdAt）。
+   */
+  async sendPrivateMessage(
+    fromCharacterId: number,
+    toCharacterId: number,
+    content: string
+  ): Promise<PrivateMessageInfo> {
+    if (!content || content.trim().length === 0) {
+      throw new AppError('消息内容不能为空', 400);
+    }
+    if (content.length > 200) {
+      throw new AppError('消息内容不能超过 200 字', 400);
+    }
+
+    // 校验好友关系
+    const friendOk = await this.isFriend(fromCharacterId, toCharacterId);
+    if (!friendOk) {
+      throw new AppError('对方不是你的好友', 404);
+    }
+
+    // 获取发送者昵称
+    const senderRows: any = await query(
+      'SELECT nickname FROM characters WHERE id = ?',
+      [fromCharacterId]
+    );
+    const senderNickname = senderRows[0]?.nickname ?? '未知';
+
+    const msgContent = { text: content.trim() };
+    const insert: any = await query(
+      'INSERT INTO messages (receiver_id, sender_id, type, content) VALUES (?, ?, ?, ?)',
+      [toCharacterId, fromCharacterId, 'chat', JSON.stringify(msgContent)]
+    );
+
+    return {
+      id: insert.insertId,
+      senderId: fromCharacterId,
+      receiverId: toCharacterId,
+      senderNickname,
+      content: msgContent,
+      isRead: false,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * 获取与某好友的私聊历史（双向，最近 100 条，按时间正序返回）。
+   */
+  async getPrivateMessages(
+    characterId: number,
+    friendCharacterId: number
+  ): Promise<PrivateMessageInfo[]> {
+    const rows: any = await query(
+      `SELECT m.id, m.sender_id, m.receiver_id, m.content, m.is_read, m.created_at,
+              s.nickname AS sender_nickname
+       FROM messages m
+       LEFT JOIN characters s ON s.id = m.sender_id
+       WHERE m.type = 'chat'
+         AND ((m.sender_id = ? AND m.receiver_id = ?)
+           OR (m.sender_id = ? AND m.receiver_id = ?))
+       ORDER BY m.created_at DESC, m.id DESC
+       LIMIT 100`,
+      [characterId, friendCharacterId, friendCharacterId, characterId]
+    );
+
+    const messages = (rows as any[]).map((r) => ({
+      id: r.id,
+      senderId: r.sender_id,
+      receiverId: r.receiver_id,
+      senderNickname: r.sender_nickname ?? '未知',
+      content: typeof r.content === 'string' ? JSON.parse(r.content) : r.content,
+      isRead: Boolean(r.is_read),
+      createdAt: new Date(r.created_at).toISOString(),
+    }));
+
+    // 按时间正序返回（最旧在前）
+    return messages.reverse();
+  }
+
+  /**
+   * 标记与某好友的私聊消息为已读（仅标记 receiver_id = characterId 的消息）。
+   */
+  async markConversationRead(
+    characterId: number,
+    friendCharacterId: number
+  ): Promise<void> {
+    await query(
+      `UPDATE messages SET is_read = TRUE
+       WHERE type = 'chat' AND receiver_id = ? AND sender_id = ?`,
+      [characterId, friendCharacterId]
+    );
   }
 
   // ==================== 内部工具 ====================
