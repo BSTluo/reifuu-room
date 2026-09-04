@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { apiGet, apiPost, ApiRequestError } from '../api/http'
-import type { CharacterAppearanceDTO, CharacterDTO, Continent } from '../api/types'
+import type { CharacterAppearanceDTO, CharacterDTO, Continent, SpawnMethod, SpawnOptionDTO } from '../api/types'
 import { useUserStore } from './user'
 
 interface CharacterState {
@@ -8,6 +8,7 @@ interface CharacterState {
   nickname: string | null
   appearance: CharacterAppearanceDTO | null
   continent: Continent | null
+  spawnMethod: string | null
   currentChunkId: string | null
   position: { x: number; y: number }
   hasCharacter: boolean | null
@@ -19,6 +20,7 @@ export const useCharacterStore = defineStore('character', {
     nickname: null,
     appearance: null,
     continent: null,
+    spawnMethod: null,
     currentChunkId: null,
     position: { x: 0, y: 0 },
     hasCharacter: null,
@@ -29,6 +31,7 @@ export const useCharacterStore = defineStore('character', {
       this.nickname = dto.nickname
       this.appearance = dto.appearance
       this.continent = dto.continent
+      this.spawnMethod = dto.spawnMethod ?? null
       this.currentChunkId = dto.currentChunkId
       this.position = dto.position
       this.hasCharacter = true
@@ -68,10 +71,15 @@ export const useCharacterStore = defineStore('character', {
       nickname: string
       appearance: CharacterAppearanceDTO
       startContinent: Continent
+      spawnMethod?: SpawnMethod
     }): Promise<void> {
       const userStore = useUserStore()
       const dto = await apiPost<CharacterDTO>('/character/create', payload, userStore.accessToken ?? undefined)
       this.applyCharacter(dto)
+    },
+    async fetchSpawnOptions(): Promise<SpawnOptionDTO[]> {
+      const userStore = useUserStore()
+      return apiGet<SpawnOptionDTO[]>('/character/spawn-options', userStore.accessToken ?? undefined)
     },
     setPosition(x: number, y: number) {
       this.position.x = x

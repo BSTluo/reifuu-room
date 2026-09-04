@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS characters (
     nickname VARCHAR(50) UNIQUE NOT NULL,
     appearance JSON NOT NULL,
     start_continent ENUM('east', 'south', 'west', 'north') NOT NULL,
+    spawn_method VARCHAR(30) NULL,
     current_chunk_id VARCHAR(50) NOT NULL,
     grid_x FLOAT DEFAULT 0,
     grid_y FLOAT DEFAULT 0,

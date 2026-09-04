@@ -2,6 +2,7 @@ import { query } from '../db/mysql.js';
 import { getRedis } from '../db/redis.js';
 import logger from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
+import SpawnPointService, { SpawnMethod } from './SpawnPointService.js';
 
 interface Appearance {
   gender: string;
@@ -17,24 +18,34 @@ interface ContinentSpawnPoint {
   gridY: number;
 }
 
-const SPAWN_POINTS: Record<string, ContinentSpawnPoint> = {
+// 兼容旧客户端 / 未传 spawnMethod 的默认出生点（保持既有角色行为）
+const DEFAULT_SPAWN_POINTS: Record<string, ContinentSpawnPoint> = {
   east: { chunkX: 10, chunkY: 10, gridX: 5, gridY: 5 },
   south: { chunkX: 10, chunkY: 10, gridX: 5, gridY: 5 },
   west: { chunkX: 10, chunkY: 10, gridX: 5, gridY: 5 },
   north: { chunkX: 10, chunkY: 10, gridX: 5, gridY: 5 },
 };
 
+const CHUNK_SIZE = 32;
+const VALID_SPAWN_METHODS: SpawnMethod[] = ['random_unowned', 'random_public'];
+
 export class CharacterService {
   async createCharacter(
     userId: string,
     nickname: string,
     appearance: Appearance,
-    startContinent: string
+    startContinent: string,
+    spawnMethod?: string
   ) {
     try {
       // Validate continent
       if (!['east', 'south', 'west', 'north'].includes(startContinent)) {
         throw new AppError('Invalid start continent', 400);
+      }
+
+      // Validate spawn method (undefined falls back to legacy default spawn)
+      if (spawnMethod !== undefined && !VALID_SPAWN_METHODS.includes(spawnMethod as SpawnMethod)) {
+        throw new AppError('Invalid spawn method', 400);
       }
 
       // Validate appearance fields
@@ -62,28 +73,43 @@ export class CharacterService {
         throw new AppError('Nickname already taken', 400);
       }
 
-      // Get spawn point for continent
-      const spawnPoint = SPAWN_POINTS[startContinent];
-      if (!spawnPoint) {
-        throw new AppError('No spawn point configured for continent', 500);
-      }
-      const chunkId = `${spawnPoint.chunkX}_${spawnPoint.chunkY}`;
+      // 计算出生点：
+      // - 传入了 spawnMethod 时，调用 SpawnPointService 从对应地块池随机分配
+      // - 未传入 spawnMethod（旧客户端）时，回退到默认出生点，保持既有行为
+      let chunkId: string;
+      let worldX: number;
+      let worldY: number;
+      let spawnMethodStored: string;
 
-      // Convert chunk coordinates to world grid coordinates
-      // World coordinate = chunkX * 32 + gridX (assuming 32x32 grid per chunk)
-      const worldX = spawnPoint.chunkX * 32 + spawnPoint.gridX;
-      const worldY = spawnPoint.chunkY * 32 + spawnPoint.gridY;
+      if (spawnMethod !== undefined) {
+        const selected = await SpawnPointService.selectSpawnPoint(spawnMethod as SpawnMethod);
+        chunkId = selected.chunkId;
+        worldX = selected.chunkX * CHUNK_SIZE + selected.gridX;
+        worldY = selected.chunkY * CHUNK_SIZE + selected.gridY;
+        spawnMethodStored = spawnMethod;
+      } else {
+        const spawnPoint = DEFAULT_SPAWN_POINTS[startContinent];
+        if (!spawnPoint) {
+          throw new AppError('No spawn point configured for continent', 500);
+        }
+        chunkId = `${spawnPoint.chunkX}_${spawnPoint.chunkY}`;
+        // World coordinate = chunkX * 32 + gridX (assuming 32x32 grid per chunk)
+        worldX = spawnPoint.chunkX * CHUNK_SIZE + spawnPoint.gridX;
+        worldY = spawnPoint.chunkY * CHUNK_SIZE + spawnPoint.gridY;
+        spawnMethodStored = 'default';
+      }
 
       // Insert character
       const result: any = await query(
         `INSERT INTO characters
-        (user_id, nickname, appearance, start_continent, current_chunk_id, grid_x, grid_y)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        (user_id, nickname, appearance, start_continent, spawn_method, current_chunk_id, grid_x, grid_y)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           userId,
           nickname,
           JSON.stringify(appearance),
           startContinent,
+          spawnMethodStored,
           chunkId,
           worldX,
           worldY,
@@ -105,6 +131,7 @@ export class CharacterService {
         nickname,
         appearance,
         startContinent,
+        spawnMethod: spawnMethodStored,
         currentChunkId: chunkId,
         position: {
           x: worldX,
@@ -134,7 +161,7 @@ export class CharacterService {
 
       // 缓存未命中，查询数据库
       const rows: any = await query(
-        `SELECT id, user_id, nickname, appearance, start_continent,
+        `SELECT id, user_id, nickname, appearance, start_continent, spawn_method,
          current_chunk_id, grid_x, grid_y, created_at
          FROM characters WHERE user_id = ? LIMIT 1`,
         [userId]
@@ -156,6 +183,7 @@ export class CharacterService {
           ? JSON.parse(char.appearance)
           : char.appearance,
         continent: char.start_continent,
+        spawnMethod: char.spawn_method ?? 'default',
         currentChunkId: char.current_chunk_id,
         position: {
           x: char.grid_x,

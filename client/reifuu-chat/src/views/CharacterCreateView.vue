@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ApiRequestError } from '../api/http'
 import { useCharacterStore } from '../stores/character'
 import { useUserStore } from '../stores/user'
-import type { Continent } from '../api/types'
+import type { Continent, SpawnMethod, SpawnOptionDTO } from '../api/types'
 
 const emit = defineEmits<{ 'character-created': [] }>()
 
@@ -53,6 +53,38 @@ const appearance = reactive({
 
 const startContinent = ref<Continent>('east')
 
+const spawnMethod = ref<SpawnMethod>('random_unowned')
+const spawnOptions = ref<SpawnOptionDTO[]>([])
+
+const selectedSpawnOption = computed(() => spawnOptions.value.find((o) => o.method === spawnMethod.value))
+
+function chooseSpawnOption(method: SpawnMethod) {
+  const option = spawnOptions.value.find((o) => o.method === method)
+  if (option?.available) {
+    spawnMethod.value = method
+  }
+}
+
+async function loadSpawnOptions() {
+  try {
+    spawnOptions.value = await characterStore.fetchSpawnOptions()
+    // 若当前选择的出生方式不可用，自动切到可用的那个
+    const current = spawnOptions.value.find((o) => o.method === spawnMethod.value)
+    const fallback = spawnOptions.value.find((o) => o.available)
+    if ((current && !current.available) || !spawnOptions.value.some((o) => o.method === spawnMethod.value)) {
+      spawnMethod.value = (fallback ?? spawnOptions.value[0])?.method ?? 'random_unowned'
+    }
+  } catch (error) {
+    // 预览接口失败时静默降级：保留默认互斥选择，仍可由服务端兜底
+    spawnOptions.value = [
+      { method: 'random_unowned', label: '随机无主地块', description: '', available: true, poolSize: 0 },
+      { method: 'random_public', label: '随机公开地块', description: '', available: true, poolSize: 0 },
+    ]
+  }
+}
+
+onMounted(loadSpawnOptions)
+
 const previewText = computed(() => {
   const genderLabel = GENDERS.find((g) => g.value === appearance.gender)?.label
   const hairLabel = HAIRSTYLES.find((h) => h.value === appearance.hair)?.label
@@ -76,6 +108,7 @@ async function handleCreate() {
       nickname: nickname.value.trim(),
       appearance: { ...appearance },
       startContinent: startContinent.value,
+      spawnMethod: spawnMethod.value,
     })
     emit('character-created')
   } catch (error) {
@@ -190,11 +223,36 @@ function handleLogout() {
         </div>
       </div>
 
+      <div class="section">
+        <label class="section-label">出生方式（互斥选择）</label>
+        <div class="spawn-grid">
+          <button
+            v-for="option in spawnOptions"
+            :key="option.method"
+            type="button"
+            class="spawn-card"
+            :class="{
+              active: spawnMethod === option.method,
+              disabled: !option.available,
+            }"
+            :disabled="!option.available"
+            @click="chooseSpawnOption(option.method)"
+          >
+            <span class="spawn-name">{{ option.label }}</span>
+            <span class="spawn-status" v-if="!option.available">（暂无可选地块）</span>
+            <span class="spawn-desc">{{ option.description }}</span>
+          </button>
+        </div>
+      </div>
+
       <div class="preview-box">
         <p class="preview-label">预览</p>
         <p class="preview-text">{{ nickname || '（未命名）' }} · {{ previewText }}</p>
         <p class="preview-text" :style="{ color: selectedContinent.color }">
           出生地：{{ selectedContinent.name }}（{{ selectedContinent.theme }}）
+        </p>
+        <p class="preview-text">
+          出生方式：{{ selectedSpawnOption?.label ?? '随机无主地块' }}
         </p>
       </div>
 
@@ -340,6 +398,51 @@ function handleLogout() {
 .continent-desc {
   color: #a1887f;
   font-size: 11px;
+}
+
+.spawn-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.spawn-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  background: #2c1810;
+  border: 2px solid #6d4c41;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  color: #f5e6d3;
+}
+
+.spawn-card.active {
+  border-color: #ffb300;
+  box-shadow: 0 0 0 2px #ffb300 inset;
+}
+
+.spawn-card.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.spawn-name {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.spawn-status {
+  color: #ffcdd2;
+  font-size: 11px;
+}
+
+.spawn-desc {
+  color: #a1887f;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .preview-box {

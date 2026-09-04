@@ -67,8 +67,9 @@ npm run dev        # Vite，端口 5173
 ### 4.1 登录 / 注册 / 角色创建
 - 认证：JWT（access + refresh），`server/src/routes/auth.ts`、`server/src/services/AuthService.ts`、`server/src/middleware/auth.ts`。
 - 角色：`GET /character/me`（存在性检查，带 Redis 缓存）、`POST /character/create`（一人一角色，昵称唯一，出生点写**世界坐标**）。
-- 坐标系约定：每区块 32x32 格，`世界坐标 = chunkX*32 + gridX`。出生点均在区块 `10_10` 的 (325, 325)。
-- 前端：`AuthView.vue`、`CharacterCreateView.vue`、`stores/user.ts`、`stores/character.ts`、`App.vue`。
+- 坐标系约定：每区块 32x32 格，`世界坐标 = chunkX*32 + gridX`。默认出生点在区块 `10_10` 的 (325, 325)。
+- 出生点选择系统（✅ 已完成，见 §4.7）：创建角色时可选「随机无主地块」或「随机公开地块」。
+- 前端：`AuthView.vue`、`CharacterCreateView.vue`（含出生点选择卡片）、`stores/user.ts`、`stores/character.ts`、`App.vue`。
 
 ### 4.2 多人位置同步（已完成）
 - 服务端 `MovementService`（Redis 缓存玩家位置，`player:move` 处理，跨区块切房间）+ `socket.ts`。
@@ -102,6 +103,9 @@ npm run dev        # Vite，端口 5173
 
 ### 4.6 聊天室实时聊天（Phase 4 核心功能，✅ 已全部完成）
 见 §6。
+
+### 4.7 出生点选择系统（✅ 已完成，GDD §2.1）
+见 §7。
 
 ---
 
@@ -174,7 +178,41 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 
 ---
 
-## 7. 测试账号（仍在数据库中）
+## 7. ⭐ 出生点选择系统（GDD §2.1，✅ 前后端均已完成）
+
+**任务状态**：已完成。角色创建时可选择出生方式：随机无主地块、随机公开地块（按人口排序）。端到端 E2E 测试 16/16 通过。
+
+### 7.1 后端（已完成 ✅）
+- **DB 迁移**：`characters` 表新增 `spawn_method VARCHAR(30) NULL` 列（`server/add_spawn_method.sql`），已有角色回填为 `'default'`。`schema.sql` 同步更新。
+- **服务 `server/src/services/SpawnPointService.ts`**：
+  - `getUnownedPool()`：生成 0,0–20,20 的候选区块网格（441 块），排除已在 `map_chunks` 中被占用（有 owner 或为 chatroom）的区块，返回可用候选列表。Redis 缓存 10s TTL。
+  - `getPublicPool()`：查 `map_chunks WHERE owner_id IS NOT NULL AND is_public = true`，按该区块角色数（`characters.current_chunk_id`）降序、`updated_at` 降序排列，LIMIT 20。Redis 缓存 10s TTL。
+  - `selectSpawnPoint(method)`：从对应池中随机选一个区块，并通过 Redis Set `spawn:selected`（300s TTL）排除最近 5 分钟内已分配的区块，避免连续创建角色挤在同一区块。选定后计算世界坐标 = `chunkX*32+5, chunkY*32+5`。
+  - `getSpawnOptions()`：返回两种出生方式的 DTO（含池大小预览），供前端展示。
+  - `invalidatePools()`：清空 Redis 缓存池。BuildService 在建造/公开切换后 fire-and-forget 调用，确保缓存及时刷新。
+- **CharacterService**：`createCharacter` 新增可选 `spawnMethod` 参数。传入时用 SpawnPointService 分配出生点；不传时向后兼容走默认 `10_10`。`spawn_method` 写入 DB 并在 DTO 中返回。`getCharacterByUserId` 同样查询并返回 `spawn_method`。
+- **REST（`server/src/routes/character.ts`）**：
+  - `GET /character/spawn-options`（需认证）→ `SpawnOptionDTO[]`，含 `method`、`label`、`poolSize`、`description`。
+  - `POST /character/create` 请求体新增可选 `spawnMethod` 字段（`'random_unowned'` | `'random_public'`）。
+- **BuildService 集成**：建造聊天室成功后、切换区块公开/私有后，均 fire-and-forget 调 `SpawnPointService.invalidatePools()`（catch + warn，不阻塞主流程）。
+
+### 7.2 前端（✅ 已完成）
+- **类型**（`api/types.ts`）：新增 `SpawnMethod` 类型、`SpawnOptionDTO` 接口；`CharacterDTO` 新增 `spawnMethod` 字段。
+- **Store**（`stores/character.ts`）：新增 `spawnMethod` 状态、`fetchSpawnOptions()` action（GET /character/spawn-options）、`createCharacter` payload 支持 `spawnMethod`。
+- **UI**（`CharacterCreateView.vue`）：大洲选择之后新增两张出生方式卡片（随机无主 / 随机公开），显示池大小与描述，可点击选择。预览框显示已选出生方式。`onMounted` 自动加载选项。
+
+### 7.3 验证方式
+- E2E 测试脚本（临时，已清理）：注册新用户 → GET spawn-options → POST create(random_unowned) → 验证非 10_10 且坐标正确 → 第二用户同样 random_unowned → 验证区块不同（recently-selected 排除）→ GET /character/me 验证 spawnMethod → 无效 method 返回 400 → 无 spawnMethod 向后兼容 10_10 → random_public 空池返回 404 友好提示。
+- 16/16 全部通过（2026-09-04）。
+
+### 7.4 注意事项
+- `random_public` 依赖 `map_chunks.is_public = true`，而 BuildService 建造时默认 `is_public = FALSE`。需玩家主动调用 `POST /build/visibility { isPublic: true }` 后才有公开地块可选。空池时返回 404 + 友好提示。
+- 无主池范围固定 0–20，若世界扩展超过此范围需调整候选网格或改用动态扫描。
+- 邀请制出生（Phase 3）尚未实现，当前仅两种 GDD §2.1 规定的出生方式。
+
+---
+
+## 8. 测试账号（仍在数据库中）
 
 | 账号 | 密码 | 角色 | 出生区块 | 世界坐标 |
 |---|---|---|---|---|
@@ -186,7 +224,7 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 
 ---
 
-## 8. 关键修复记录（重要背景，别再踩坑）
+## 9. 关键修复记录（重要背景，别再踩坑）
 
 1. **世界观坐标 bug**：旧数据把区块内坐标当世界坐标存（(5,5) 而非 (325,325)），导致多人不在同一区块、互相看不见。已在 `CharacterService` 修复 + 用 `server/fix_character_positions.sql` / JS 脚本迁移存量。现存角色坐标已世界化。
 2. **同区块玩家互相可见**：此前 `getPlayersInChunk` 只扫 Redis，而"从未移动"的玩家无 Redis 键 → 别人看不到他。修复：新增 `MovementService.ensurePlayerCached()`（连接时把 DB 位置写回 Redis）＋ `client:request-chunk-players` 握手（客户端注册完监听器后再请求名单，避免推送早于监听注册的竞态）。
@@ -203,7 +241,7 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 
 ---
 
-## 9. 已知问题 / 待确认
+## 10. 已知问题 / 待确认
 
 - **初始视野范围口径已统一**：GDD 2.6 写 5x5，服务端已用 `exploreArea(..., 2)` = 5x5。若策划后续改口径，改 `server/src/socket.ts` 的半径。
 - ~~前端迷雾完全未做~~（**已解决**，§5.2 完成）。
@@ -216,7 +254,7 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 
 ---
 
-## 10. 下一步建议（给下个团队）
+## 11. 下一步建议（给下个团队）
 
 1. 先通读本文件 + `docs/GDD.md` + `docs/ART_STYLE_GUIDE.md`（此目录不是 git 仓库）。
 2. ~~视野迷雾前端~~（**已完成** §5.2）。

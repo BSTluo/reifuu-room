@@ -24,6 +24,16 @@ export interface RefreshResponse {
 
 export type Continent = 'east' | 'south' | 'west' | 'north'
 
+export type SpawnMethod = 'random_unowned' | 'random_public'
+
+export interface SpawnOptionDTO {
+  method: SpawnMethod
+  label: string
+  description: string
+  available: boolean
+  poolSize: number
+}
+
 export interface CharacterAppearanceDTO {
   gender: string
   hair: string
@@ -36,6 +46,7 @@ export interface CharacterDTO {
   nickname: string
   appearance: CharacterAppearanceDTO
   continent: Continent
+  spawnMethod: string
   currentChunkId: string
   position: { x: number; y: number }
 }

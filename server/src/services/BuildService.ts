@@ -2,6 +2,7 @@ import { query } from '../db/mysql.js';
 import logger from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
 import InventoryService from './InventoryService.js';
+import SpawnPointService from './SpawnPointService.js';
 
 interface BuildTemplate {
   template: 'wooden_house' | 'stone_house' | 'advanced_house';
@@ -116,6 +117,11 @@ export class BuildService {
 
       const chatRoomId = result.insertId;
 
+      // 建造改变了区块占用状态，出生地块池需失效
+      SpawnPointService.invalidatePools().catch((err) =>
+        logger.warn('Failed to invalidate spawn pools after build', err)
+      );
+
       logger.info(`Character ${characterId} built ${template} at chunk ${chunkId}`);
 
       return {
@@ -191,6 +197,11 @@ export class BuildService {
       await query(
         'UPDATE map_chunks SET is_public = ? WHERE chunk_id = ?',
         [isPublic, chunkId]
+      );
+
+      // 公开状态切换影响公开地块池，需失效缓存
+      SpawnPointService.invalidatePools().catch((err) =>
+        logger.warn('Failed to invalidate spawn pools after public toggle', err)
       );
 
       logger.info(`Chunk ${chunkId} set to ${isPublic ? 'public' : 'private'}`);
