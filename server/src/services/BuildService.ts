@@ -3,7 +3,6 @@ import logger from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
 import InventoryService from './InventoryService.js';
 import SpawnPointService from './SpawnPointService.js';
-import TownService from './TownService.js';
 
 interface BuildTemplate {
   template: 'wooden_house' | 'stone_house' | 'advanced_house';
@@ -121,11 +120,6 @@ export class BuildService {
       // 建造改变了区块占用状态，出生地块池需失效
       SpawnPointService.invalidatePools().catch((err) =>
         logger.warn('Failed to invalidate spawn pools after build', err)
-      );
-
-      // 城镇检测：3x3 范围内聊天室密度达标时自动创建城镇（GDD §2.3）
-      TownService.detectTownAfterBuild(chunkId, characterId).catch((err) =>
-        logger.warn('Town detection failed after build', err)
       );
 
       logger.info(`Character ${characterId} built ${template} at chunk ${chunkId}`);

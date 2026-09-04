@@ -15,7 +15,6 @@ import MailboxPanel from '../components/game/HUD/MailboxPanel.vue'
 import PlayerInfoCard from '../components/game/HUD/PlayerInfoCard.vue'
 import PrivateChatPanel from '../components/game/HUD/PrivateChatPanel.vue'
 import PigeonComposePanel from '../components/game/HUD/PigeonComposePanel.vue'
-import TownPortalPanel from '../components/game/HUD/TownPortalPanel.vue'
 import { useFriendStore } from '../stores/friend'
 import { apiGet, apiPost, ApiRequestError } from '../api/http'
 import type { BuildTemplateDTO, OwnedChunkDTO } from '../api/types'
@@ -43,7 +42,6 @@ const building = ref(false)
 // ---- 好友系统 ----
 const showFriendList = ref(false)
 const showMailbox = ref(false)
-const showTownPortal = ref(false)
 const playerInfo = ref<{ characterId: number; nickname: string } | null>(null)
 
 const ITEM_LABELS: Record<string, string> = {
@@ -182,19 +180,6 @@ function onTeleportFriend(payload: { characterId: number }) {
   socketClient.emit('friend:teleport', { toCharacterId: payload.characterId })
 }
 
-// ---- 城镇传送门 ----
-function onTeleportTown(payload: { townId: number }) {
-  socketClient.emit('town:teleport', { townId: payload.townId })
-}
-
-function onOpenPortalPanel() {
-  showTownPortal.value = true
-}
-
-function onClosePortalPanel() {
-  showTownPortal.value = false
-}
-
 // ---- 好友私聊 ----
 function onOpenPrivateChat(payload: { characterId: number; nickname: string }) {
   friendStore.openPrivateChat(payload.characterId, payload.nickname)
@@ -275,9 +260,6 @@ onMounted(() => {
   EventBus.on('ui:open-pigeon-compose', onOpenPigeonCompose)
   EventBus.on('ui:close-pigeon-compose', onClosePigeonCompose)
   EventBus.on('friend:pigeon-delivered', onPigeonDelivered)
-  EventBus.on('ui:teleport-town', onTeleportTown)
-  EventBus.on('ui:open-portal-panel', onOpenPortalPanel)
-  EventBus.on('ui:close-portal-panel', onClosePortalPanel)
 
   // 迷雾 store 先在 socket 建立前监听，确保不遗漏 map:initial-explored / map:explore 事件
   explorationStore.startListening()
@@ -319,9 +301,6 @@ onBeforeUnmount(() => {
   EventBus.off('ui:open-pigeon-compose', onOpenPigeonCompose)
   EventBus.off('ui:close-pigeon-compose', onClosePigeonCompose)
   EventBus.off('friend:pigeon-delivered', onPigeonDelivered)
-  EventBus.off('ui:teleport-town', onTeleportTown)
-  EventBus.off('ui:open-portal-panel', onOpenPortalPanel)
-  EventBus.off('ui:close-portal-panel', onClosePortalPanel)
   if (toastTimer) clearTimeout(toastTimer)
   explorationStore.stopListening()
   socketClient.disconnect()
@@ -366,9 +345,6 @@ onBeforeUnmount(() => {
           ✉️ 信箱
           <span v-if="friendStore.unreadCount > 0" class="unread-badge">{{ friendStore.unreadCount }}</span>
         </button>
-        <button class="action-btn" @click="showTownPortal = !showTownPortal">
-          🌀 传送门
-        </button>
       </div>
 
       <div v-if="showFriendList" class="panel">
@@ -377,10 +353,6 @@ onBeforeUnmount(() => {
 
       <div v-if="showMailbox" class="panel">
         <MailboxPanel />
-      </div>
-
-      <div v-if="showTownPortal" class="panel">
-        <TownPortalPanel />
       </div>
 
       <div v-if="roomStore.inRoom" class="panel chat-panel-wrap">

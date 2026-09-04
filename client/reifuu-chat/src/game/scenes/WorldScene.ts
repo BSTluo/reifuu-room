@@ -10,7 +10,7 @@ import { useExplorationStore } from '../../stores/exploration'
 import type { ChunkFogState } from '../../stores/exploration'
 import { apiGet } from '../../api/http'
 import { useUserStore } from '../../stores/user'
-import type { ResourceNodeDTO, ChatRoomDTO, TownDTO } from '../../api/types'
+import type { ResourceNodeDTO, ChatRoomDTO } from '../../api/types'
 
 /** 地形 Blitter 层深度：低于一切实体与迷雾层 */
 const TERRAIN_DEPTH = -10000
@@ -60,10 +60,6 @@ export class WorldScene extends Phaser.Scene {
   private roomSprites = new Map<string, Phaser.GameObjects.Image>()
   /** roomId -> 聊天室数据（当前区块） */
   private roomData = new Map<string, ChatRoomDTO>()
-  /** townId -> 传送门精灵（当前区块） */
-  private portalSprites = new Map<number, Phaser.GameObjects.Image>()
-  /** townId -> 城镇数据（当前区块） */
-  private portalData = new Map<number, TownDTO>()
 
   constructor() {
     super('WorldScene')
@@ -107,13 +103,11 @@ export class WorldScene extends Phaser.Scene {
     EventBus.on('ui:move-player', this.onUIMovePlayer)
     EventBus.on('ui:spawn-character', this.onUISpawnCharacter)
     EventBus.on('friend:teleport-confirmed', this.onTeleportConfirmed)
-    EventBus.on('town:teleport-confirmed', this.onTownTeleportConfirmed)
     EventBus.on('exploration:updated', this.onExplorationUpdated)
     EventBus.on('resource:collected', this.onResourceCollected)
     EventBus.on('resource:node-depleted', this.onResourceNodeDepleted)
     EventBus.on('player:chunk-changed', this.onPlayerChunkChangedForResources)
     EventBus.on('player:chunk-changed', this.onPlayerChunkChangedForRooms)
-    EventBus.on('player:chunk-changed', this.onPlayerChunkChangedForPortals)
     EventBus.on('build:created', this.onBuildCreated)
 
     // 若 socket 尚未推送初始已探索列表（如重连复用旧 socket），通过 REST 兜底拉取
@@ -129,9 +123,6 @@ export class WorldScene extends Phaser.Scene {
 
     // 加载当前区块的聊天室房屋标记
     this.loadChunkRooms(this.currentChunkId)
-
-    // 加载当前区块的传送门标记
-    this.loadChunkPortals(this.currentChunkId)
 
     EventBus.emit('phaser:ready', { sceneKey: this.scene.key })
     EventBus.emit('phaser:scene-changed', { sceneKey: this.scene.key })
@@ -171,19 +162,16 @@ export class WorldScene extends Phaser.Scene {
     EventBus.off('ui:move-player', this.onUIMovePlayer)
     EventBus.off('ui:spawn-character', this.onUISpawnCharacter)
     EventBus.off('friend:teleport-confirmed', this.onTeleportConfirmed)
-    EventBus.off('town:teleport-confirmed', this.onTownTeleportConfirmed)
     EventBus.off('exploration:updated', this.onExplorationUpdated)
     EventBus.off('socket:connected', this.onSocketConnected)
     EventBus.off('resource:collected', this.onResourceCollected)
     EventBus.off('resource:node-depleted', this.onResourceNodeDepleted)
     EventBus.off('player:chunk-changed', this.onPlayerChunkChangedForResources)
     EventBus.off('player:chunk-changed', this.onPlayerChunkChangedForRooms)
-    EventBus.off('player:chunk-changed', this.onPlayerChunkChangedForPortals)
     EventBus.off('build:created', this.onBuildCreated)
     this.cleanupMultiplayerSync()
     this.clearResourceSprites()
     this.clearRoomSprites()
-    this.clearPortalSprites()
     this.destroyAllChunks()
   }
 
@@ -461,35 +449,6 @@ export class WorldScene extends Phaser.Scene {
     })
   }
 
-  /** 城镇传送确认：更新玩家位置、区块、迷雾与资源/房间 */
-  private onTownTeleportConfirmed = (data: {
-    position: { x: number; y: number }
-    chunkId: string
-    townName: string
-    cooldownRemaining: number
-  }) => {
-    const characterStore = useCharacterStore()
-    characterStore.setPosition(data.position.x, data.position.y)
-
-    // 更新玩家精灵位置
-    const { x, y } = gridToIso(data.position.x, data.position.y)
-    this.player.setPosition(x, y)
-    this.player.moveTo(x, y)
-    this.clearPath()
-
-    // 区块变化：更新 currentChunkId、触发资源/房间/传送门加载、刷新迷雾
-    if (data.chunkId !== this.currentChunkId) {
-      this.currentChunkId = data.chunkId
-      EventBus.emit('player:chunk-changed', { chunkId: data.chunkId })
-      this.refreshFog()
-    }
-
-    EventBus.emit('game:toast', {
-      message: `已传送到 ${data.townName}`,
-      type: 'success',
-    })
-  }
-
   private onExplorationUpdated = () => {
     this.refreshFog()
   }
@@ -601,61 +560,6 @@ export class WorldScene extends Phaser.Scene {
   /** 玩家进入新区块时加载该区块的聊天室房屋 */
   private onPlayerChunkChangedForRooms = (payload: { chunkId: string }) => {
     this.loadChunkRooms(payload.chunkId)
-  }
-
-  /** 玩家进入新区块时加载该区块的传送门 */
-  private onPlayerChunkChangedForPortals = (payload: { chunkId: string }) => {
-    this.loadChunkPortals(payload.chunkId)
-  }
-
-  /** 从 REST API 加载所有城镇并在当前区块渲染传送门（需携带认证 token） */
-  private async loadChunkPortals(chunkId: string | null): Promise<void> {
-    if (!chunkId) return
-    const userStore = useUserStore()
-    const token = userStore.accessToken ?? undefined
-    this.clearPortalSprites()
-    try {
-      const data = await apiGet<{ towns: TownDTO[] }>('/town/list', token)
-      const towns = data.towns ?? []
-      const target = chunkIdToOrigin(chunkId)
-      for (const town of towns) {
-        const origin = chunkIdToOrigin(town.centerChunkId)
-        // 仅渲染中心区块与玩家当前区块一致的传送门（MVP：只渲染所在区块）
-        if (origin.chunkX === target.chunkX && origin.chunkY === target.chunkY) {
-          this.renderPortalMarker(town)
-        }
-      }
-    } catch (err) {
-      // 静默失败：网络错误或尚未登录
-      console.warn('loadChunkPortals failed:', err)
-    }
-  }
-
-  /** 渲染单个传送门精灵（可点击打开传送门面板） */
-  private renderPortalMarker(town: TownDTO): void {
-    const { wx: originWX, wy: originWY } = chunkIdToWorldOrigin(town.centerChunkId)
-    // 传送门摆在城镇中心区块中央
-    const cx = originWX + 24
-    const cy = originWY + 24
-    const { x, y } = gridToIso(cx, cy)
-    const sprite = this.add.image(x, y - 12, 'portal')
-    sprite.setDepth(y + 2)
-    sprite.setInteractive({ useHandCursor: true })
-    sprite.on('pointerdown', () => this.onPortalMarkerClick(town))
-    this.portalSprites.set(town.id, sprite)
-    this.portalData.set(town.id, town)
-  }
-
-  /** 点击传送门：提示 UI 层打开传送门面板（GameView 监听后显示 TownPortalPanel） */
-  private onPortalMarkerClick(town: TownDTO): void {
-    EventBus.emit('ui:open-portal-panel')
-  }
-
-  /** 清除当前所有传送门精灵 */
-  private clearPortalSprites(): void {
-    this.portalSprites.forEach((sprite) => sprite.destroy())
-    this.portalSprites.clear()
-    this.portalData.clear()
   }
 
   /** 建造完成：立即刷新当前区块房屋标记 */

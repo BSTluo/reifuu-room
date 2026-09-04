@@ -12,7 +12,6 @@ import ChatMessageService from './services/ChatMessageService.js';
 import PluginService from './services/PluginService.js';
 import BuildService from './services/BuildService.js';
 import FriendService from './services/FriendService.js';
-import TownService from './services/TownService.js';
 import { query } from './db/mysql.js';
 
 interface SocketData {
@@ -173,17 +172,6 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
           );
           if (newlyExplored.length > 0) {
             socket.emit('map:explore', { chunks: newlyExplored });
-          }
-
-          // 城镇到访检测：如果新区块是某城镇中心，记录到访以解锁传送门
-          const townRows: any = await query(
-            'SELECT id FROM towns WHERE center_chunk_id = ?',
-            [result.chunkId]
-          );
-          if (townRows.length > 0) {
-            TownService.recordVisit(character.id, townRows[0].id).catch((err) =>
-              logger.warn('Failed to record town visit on move', err)
-            );
           }
 
           // Get players in new chunk
@@ -584,85 +572,6 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       } catch (error: any) {
         logger.error('Friend private message error', error);
         socket.emit('error', { message: error.message || 'Failed to send message' });
-      }
-    });
-
-    // ---- Town teleport (GDD §2.3 传送门) ----
-    socket.on('town:teleport', async (data: { townId: number }) => {
-      if (!character) {
-        socket.emit('error', { message: 'No character found' });
-        return;
-      }
-      try {
-        const result = await TownService.teleportToTown(
-          String(character.id),
-          Number(data?.townId)
-        );
-
-        const oldChunkId = character.chunkId;
-        const newChunkId = result.chunkId;
-        const chunkChanged = oldChunkId !== newChunkId;
-
-        if (chunkChanged) {
-          // Leave old chunk room and notify
-          socket.leave(oldChunkId);
-          socket.to(oldChunkId).emit('player:leave-chunk', {
-            characterId: character.id,
-          });
-
-          // Join new chunk room
-          socket.join(newChunkId);
-          character.chunkId = newChunkId;
-
-          logger.info(
-            `${character.nickname} town-teleported from chunk ${oldChunkId} to ${newChunkId}`
-          );
-
-          // Auto-explore new area
-          const newlyExplored = await ExplorationService.exploreArea(
-            character.id,
-            newChunkId,
-            1
-          );
-          if (newlyExplored.length > 0) {
-            socket.emit('map:explore', { chunks: newlyExplored });
-          }
-
-          // 城镇传送也记录到访（确保目标城镇解锁）
-          TownService.recordVisit(character.id, Number(data?.townId)).catch((err) =>
-            logger.warn('Failed to record town visit on teleport', err)
-          );
-
-          // Get players in new chunk
-          const playersInNewChunk = await MovementService.getPlayersInChunk(newChunkId);
-          const otherPlayers = playersInNewChunk.filter(p => p.characterId !== character.id);
-
-          socket.emit('players:in-chunk', {
-            players: otherPlayers.map(p => ({
-              characterId: p.characterId,
-              nickname: p.nickname,
-              position: p.position,
-            })),
-          });
-
-          // Notify new chunk that this player entered
-          socket.to(newChunkId).emit('player:enter-chunk', {
-            characterId: character.id,
-            nickname: character.nickname,
-            position: result.position,
-          });
-        }
-
-        // Confirm to client
-        socket.emit('town:teleport-confirmed', {
-          position: result.position,
-          chunkId: result.chunkId,
-          townName: result.townName,
-          cooldownRemaining: result.cooldownRemaining,
-        });
-      } catch (error: any) {
-        logger.error('Town teleport error', error);
-        socket.emit('error', { message: error.message || 'Town teleport failed' });
       }
     });
 
