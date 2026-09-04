@@ -108,6 +108,7 @@ export class WorldScene extends Phaser.Scene {
     EventBus.on('player:chunk-changed', this.onPlayerChunkChangedForResources)
     EventBus.on('player:chunk-changed', this.onPlayerChunkChangedForRooms)
     EventBus.on('build:created', this.onBuildCreated)
+    EventBus.on('friend:teleport-confirmed', this.onFriendTeleportConfirmed)
 
     // 若 socket 尚未推送初始已探索列表（如重连复用旧 socket），通过 REST 兜底拉取
     if (!explorationStore.initialized) {
@@ -167,6 +168,7 @@ export class WorldScene extends Phaser.Scene {
     EventBus.off('player:chunk-changed', this.onPlayerChunkChangedForResources)
     EventBus.off('player:chunk-changed', this.onPlayerChunkChangedForRooms)
     EventBus.off('build:created', this.onBuildCreated)
+    EventBus.off('friend:teleport-confirmed', this.onFriendTeleportConfirmed)
     this.cleanupMultiplayerSync()
     this.clearResourceSprites()
     this.clearRoomSprites()
@@ -513,7 +515,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.otherPlayers.has(data.characterId)) return
 
     const { x, y } = gridToIso(data.position.x, data.position.y)
-    const sprite = new OtherPlayerSprite(this, x, y, data.nickname)
+    const sprite = new OtherPlayerSprite(this, x, y, data.nickname, data.characterId)
     this.otherPlayers.set(data.characterId, sprite)
   }
 
@@ -521,6 +523,30 @@ export class WorldScene extends Phaser.Scene {
     const socket = socketClient.instance
     if (socket) {
       socket.emit('player:move', { x: gx, y: gy })
+    }
+  }
+
+  /** 好友传送确认：将本地玩家瞬移到目标坐标并刷新区块资源/房屋 */
+  private onFriendTeleportConfirmed = (data: {
+    characterId: string
+    nickname: string
+    position: { x: number; y: number }
+    chunkId: string
+  }) => {
+    const { x, y } = gridToIso(data.position.x, data.position.y)
+    this.player.setPosition(x, y)
+    this.player.moveTo(x, y)
+    this.clearPath()
+
+    const characterStore = useCharacterStore()
+    characterStore.setPosition(data.position.x, data.position.y)
+
+    if (data.chunkId !== this.currentChunkId) {
+      this.currentChunkId = data.chunkId
+      EventBus.emit('player:chunk-changed', { chunkId: data.chunkId })
+      this.refreshFog()
+      this.loadChunkResources(data.chunkId)
+      this.loadChunkRooms(data.chunkId)
     }
   }
 

@@ -2,7 +2,7 @@
 
 > 本文件用于**当前团队 → 下一个团队**的工作交接。它记录项目当前真实状态、已完成/进行中/待办工作、团队结构、运行方式与已知问题。
 > 下一个团队接手时，请先通读本文件 + `docs/GDD.md`，再检查代码现状。
-> 最后更新：2026-09-04
+> 最后更新：2026-09-04（好友系统 §6.7 追加）
 
 ---
 
@@ -103,6 +103,9 @@ npm run dev        # Vite，端口 5173
 ### 4.6 聊天室实时聊天（Phase 4 核心功能，✅ 已全部完成）
 见 §6。
 
+### 4.7 好友系统（Phase 3，✅ 已全部完成）
+见 §6.7。
+
 ---
 
 ## 5. ⭐ 视野迷雾系统（Phase 2，✅ 前后端均已完成）
@@ -174,6 +177,96 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 
 ---
 
+## 6.5 ⭐ 插件系统：音乐/视频同步播放（✅ 前后端均已完成）
+
+**任务状态**：已完成。房间内插件架构 + 两个内建插件（一起听歌 / 一起看视频）端到端验证通过（REST + socket 多端同步 + 浏览器 UI）。
+
+### 6.5.1 架构（GDD §2.5）
+插件以"房间会话"形式存在，**不持久化**（内存中，房间清空即销毁）。每个房间每个 pluginId 最多一个活跃实例：
+- **控制器模式**：谁激活插件谁就是 controller（`controllerId`），controller 负责播放/暂停/seek，其他成员只读跟随。
+- **状态同步**：controller 定期（每 5s）+ 操作时向服务端发 `plugin:state-sync`，服务端 `Object.assign` 合并后**广播给房间内所有人（含发送者）**，所有客户端走同一条状态应用路径（`applyRemoteState`）。
+- **加入即同步**：`room:join` 时服务端把该房间已激活插件列表（`plugin:list`）发给加入者，迟到者能立刻看到正在播放的内容并跳到当前位置（漂移容差：音乐 2s / 视频 3s）。
+
+### 6.5.2 后端（已完成 ✅）
+- 服务 `server/src/services/PluginService.ts`：内存会话管理器（`activate`/`deactivate`/`updateState`/`getState`/`listActive`/`onRoomEmpty`）。key = `${roomId}:${pluginId}`。
+- socket 事件（`server/src/socket.ts`，白名单 `music-sync` / `video-sync`）：
+  - `plugin:activate`（C→S）→ 校验在房间内 → 激活（`initialState.controllerId = character.id`）→ 房间广播 `plugin:activated` `{ roomId, pluginId, state }`。
+  - `plugin:deactivate`（C→S）→ 房间广播 `plugin:deactivated`。
+  - `plugin:state-sync`（C→S）→ 合并状态 → `io.to(roomKey)` 广播 `plugin:state`（**含发送者**——修复点：原先 `socket.to` 排除发送者导致 controller 自己的 UI 不更新）。
+  - `room:join` → 加入者收 `plugin:list` `{ roomId, plugins: [...] }`。
+  - 房间清空时 `PluginService.onRoomEmpty()` 清理该房间全部插件会话。
+
+### 6.5.3 前端（已完成 ✅）
+- `stores/plugin.ts`：Pinia store，`activePlugins: Map<roomId, Map<pluginId, { pluginId, state }>>`（Vue 3 reactive 支持 Map），监听 4 个插件事件 + `room:left` 清理。
+- `components/game/HUD/plugins.ts`：插件注册表 `BUILTIN_PLUGINS`（id/name/icon/description/component），新增插件只需在此注册 + 服务端白名单加 id。
+- `components/game/HUD/ChatPanel.vue`：插件工具栏（每插件一个按钮，active 高亮）+ `<component :is>` 动态渲染插件面板；离开房间时自动停用面板插件。
+- `MusicPlayer.vue`（music-sync）：HTML5 `<audio>`，URL 输入 + 播放/暂停 + 进度条 seek + 音量；controller 每 5s 广播 `position`。
+- `VideoPlayer.vue`（video-sync）：YouTube IFrame API（懒加载脚本），URL 解析多种格式（watch/youtu.be/embed/纯 ID）；`playerReady` 标志防止 player 未就绪时调用 `getCurrentTime`（修复点）；onStateChange 播放/暂停事件自动广播状态。
+
+### 6.5.4 修复记录（E2E 验证时发现）
+1. **controller 判断类型不匹配**：`characterId`（number 5）与 `controllerId`（string "5"）`===` 严格比较恒为 false → 房主看不到播放控件。修复：`String(state?.controllerId) === String(characterStore.characterId)`（MusicPlayer.vue 与 VideoPlayer.vue 均已修）。
+2. **controller 收不到自己的状态广播**：服务端 `plugin:state-sync` 原用 `socket.to(roomKey)`（排除发送者），controller 本地 store 永不更新 → now-playing 界面不出现。修复：改为 `io.to(roomKey)` 广播给所有人（见 §6.5.2）。
+3. **YouTube player 未就绪就调用 API**：`applyRemoteState` 在 `onReady` 前被事件触发，`getCurrentTime is not a function` 报错。修复：新增 `playerReady` 标志，`onReady` 时置 true，`applyRemoteState`/`broadcastState`/`startProgressBroadcast` 均加防护。
+
+### 6.5.5 验证方式（已通过 ✅）
+- 浏览器（player_a）：进入房间 → 点"🎵 一起听歌" → 输入 MP3 URL → 播放中（进度条/暂停/音量正常，pluginState 含 track/position/playing/controllerId）。
+- 多端同步（player_b socket 客户端）：join 后收 `plugin:list`（含完整播放状态）+ 周期性 `plugin:state` 广播（每 5s 位置同步）。
+- 视频：点"🎬 一起看视频" → 输入 YouTube 链接 → iframe 加载播放，状态广播正常。
+
+---
+
+## 6.7 ⭐ 好友系统（Phase 3，✅ 前后端均已完成）
+
+**任务状态**：已完成。好友申请（信箱）+ 好友列表 + 点击玩家发申请 + 好友传送（5 分钟冷却）端到端验证通过（REST + socket 全链路）。
+
+### 6.7.1 数据库
+- `friendships (id, character_id_1, character_id_2, created_at)`：单条记录表示双向好友关系，`character_id_1 < character_id_2`，`UNIQUE KEY idx_pair (character_id_1, character_id_2)`。已建表。
+- `friend_requests (id, from_character_id, to_character_id, status ENUM('pending','accepted','rejected'), created_at, responded_at)`。已建表。
+  - ⚠️ **重要**：`idx_pair_pending (from_character_id, to_character_id, status)` 是**普通索引（非唯一）**，见 §6.7.6 修复记录——若有人把它改回 UNIQUE 会重现 accept 崩溃。
+- `pigeon_messages`（飞鸽传信，GDD 2.7）：**仅建表**，service/routes/UI 未实现（后续扩展项）。
+
+### 6.7.2 后端
+- 服务 `server/src/services/FriendService.ts`：`sendRequest` / `acceptRequest` / `rejectRequest` / `getFriendList` / `getPendingRequests` / `removeFriend` / `teleportToFriend` / `isCharacterOnline` / `getFriendCount` / `getFriendIds`。
+  - 上限 100 好友；pending 请求双向查重（无唯一索引，靠代码检查）；`teleportToFriend` 用 Redis key `friend:teleport:cooldown:{characterId}`（值=过期时间戳）做 5 分钟冷却，REST 与 socket 共享。
+  - 在线判定：Redis `player:{characterId}:position` 键是否存在（5 分钟 TTL，socket 连接时由 `ensurePlayerCached` 写入并每 2 分钟刷新）。
+- REST `server/src/routes/friends.ts`（挂载于 `index.ts` 的 `/friends`，均需认证）：
+  - `POST /friends/request/:characterId`、`POST /friends/accept/:requestId`、`POST /friends/reject/:requestId`、`GET /friends`、`GET /friends/requests`、`DELETE /friends/:characterId`、`POST /friends/teleport/:characterId`。
+- socket 事件（`server/src/socket.ts`）：
+  - C→S：`friend:request-state` / `friend:send-request {characterId}` / `friend:accept-request {requestId}` / `friend:reject-request {requestId}` / `friend:remove {characterId}` / `friend:teleport {characterId}`。
+  - S→C：`friend:state {friends, requests}` / `friend:request-sent` / `friend:request-received` / `friend:accepted` / `friend:rejected` / `friend:removed` / `friend:teleport-confirmed {characterId, nickname, position, chunkId}`。
+  - 跨玩家定向通知用 `characterSocketMap`（`Map<characterId, Set<socketId>>`，connect 注册 / disconnect 清理）+ `getSocketForCharacter(io, characterId)`。
+  - `friend:teleport` 处理器完整镜像 `player:move` 的跨区块逻辑：离开旧 chunk 房间 → 广播 leave-chunk → 加入新 chunk → `exploreArea`（迷雾）→ `players:in-chunk` → `player:enter-chunk` → 给自己发 `friend:teleport-confirmed`。
+
+### 6.7.3 前端
+- 类型：`api/types.ts` 增 `FriendListItemDTO` / `FriendRequestDTO` / `FriendStateDTO` / `FriendTeleportResultDTO`；`api/http.ts` 增 `apiDelete`。
+- `stores/friend.ts`（Pinia）：`friends[]` / `requests[]` / `unreadRequestCount`；动作全部走 socket；`registerFriendListeners()`（幂等）在 `GameView.onMounted` 调用一次。
+- UI 组件（`components/game/HUD/`）：
+  - `FriendListPanel.vue`：好友列表（在线绿点、传送按钮——离线禁用、移除需确认）。
+  - `MailboxPanel.vue`：待处理好友申请（接受/拒绝）。
+  - `PlayerInfoCard.vue`：点击其他玩家弹出的信息卡，"发送好友申请"按钮；发送状态由 `friend:request-sent` / `socket:error` 事件更新。
+- 场景接线：
+  - `OtherPlayerSprite` 构造函数增 `characterId` 参数，`setInteractive` 命中区 `Rectangle(-16,-56,32,64)`，点击发 EventBus `ui:show-player-info`。
+  - `WorldScene`：`addOtherPlayer` 传入 characterId；`onFriendTeleportConfirmed` 处理器设置玩家 iso 坐标、更新 characterStore、发 `player:chunk-changed`、按需重载区块资源/房间、刷新迷雾（create/shutdown 中注册/注销）。
+- `GameView.vue`：好友/信箱按钮（含未读角标）+ 三块面板/弹窗 + EventBus 处理器。
+
+### 6.7.4 验证方式（已通过 ✅）
+- REST：登录 → `POST /friends/request/6` → B `GET /friends/requests` → B `POST /friends/accept/1` → 双方 `GET /friends` → `POST /friends/teleport/6` → 再传送得 429 冷却 → `DELETE /friends/6`。
+- socket：A/B 双客户端连接，`friend:send-request` → B 收 `friend:request-received` → B accept → **双方**均收 `friend:accepted` → A `friend:teleport` 收 `friend:teleport-confirmed` 且同区块 `players:in-chunk` 可见 → A `friend:remove` 双方同步。
+
+### 6.7.5 测试流程（player_a / player_b，均 10_10 区块）
+```bash
+# 登录拿 token（字段名 usernameOrEmail！）
+curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json" \
+  -d '{"usernameOrEmail":"player_a","password":"test123456"}'
+# 之后带 Authorization: Bearer <token> 调 /friends/* 各端点
+```
+
+### 6.7.6 修复记录（E2E 验证时发现）
+1. **accept 时 `Duplicate entry '5-6-accepted' for key 'idx_pair_pending'`**：原 schema 把 `UNIQUE KEY idx_pair_pending (from_character_id, to_character_id, status)` 全状态唯一化——同一对好友一旦有历史 accepted/rejected 行，新请求 accept 的 UPDATE 撞唯一键，`friend:accepted` 永远不发出（且 REST 路径同样会 500）。修复：改回**普通索引**，pending 查重由 `FriendService.sendRequest` 显式双向查询完成。⚠️ MySQL 5.7 下不要尝试用生成列实现"仅 pending 唯一"（生成列 ALTER 与表上外键冲突，errno 150）。
+2. **服务端错误事件名**：socket 错误统一是 `error`（不是 `socket:error`）；E2E 脚本若漏监听 `error` 会误以为 handler 静默失败。
+
+---
+
 ## 7. 测试账号（仍在数据库中）
 
 | 账号 | 密码 | 角色 | 出生区块 | 世界坐标 |
@@ -208,8 +301,9 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 - **初始视野范围口径已统一**：GDD 2.6 写 5x5，服务端已用 `exploreArea(..., 2)` = 5x5。若策划后续改口径，改 `server/src/socket.ts` 的半径。
 - ~~前端迷雾完全未做~~（**已解决**，§5.2 完成）。
 - 小地图、资源节点/建造/聊天室前端交互 UI（**已补齐**：`WorldScene` 资源节点渲染 + `GameView` 背包/建造面板）。
-- 好友系统 / 交通工具系统 / 传送门系统仍未实现（GDD Phase 3/4）。
+- ~~好友系统~~（**已完成** §6.7）；交通工具系统 / 传送门系统仍未实现（GDD Phase 3/4）。
 - 聊天室成员角色（房主/成员/访客）目前仅有房主 vs 访客二分，邀请制与成员管理未实现（见 §6.2）。
+- 飞鸽传信（pigeon_messages）仅建表，service/routes/UI 未实现（见 §6.7.1）。
 - 数据库 `192.168.12.1` 是内网地址，换环境/远程时需改 `.env`（曾有短暂不可达导致 500）。
 - **表结构迁移注意**：`schema.sql` 用 `CREATE TABLE IF NOT EXISTS`，不会 ALTER 已存在的表。若在旧库上跑 schema，`map_chunks` / `resource_nodes` / `inventory_items` / `chat_rooms` 等新列需手动迁移或删表重建（本次交接中 `map_chunks` 因缺 `chunk_id/chunk_type/owner_id/is_public` 列已重建）。
 - **`/auth/login` 字段名**是 `usernameOrEmail`（不是 `username`），`/auth/register` 才是 `username`。API 响应格式 `{ status, data }` 或 `{ status, message }`。
@@ -222,7 +316,8 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 2. ~~视野迷雾前端~~（**已完成** §5.2）。
 3. ~~复核现有 API 的前端对接~~（**已完成**：资源采集/建造/背包/聊天室均已端到端联通并 REST 验证通过）。
 4. ~~进入聊天室实际使用~~（**已完成** §6）：点击房屋标记 → 进入房间 → 实时文字聊天，前后端 + 浏览器 UI 均验证通过。
-5. **聊天室进阶功能**：房间权限管理（成员角色/邀请制）、音乐/视频同步播放、房间装饰系统。
-6. 规划 Phase 3（好友/社交、传送门）与 Phase 4（交通工具）。
-7. 建议为前端新增 UI/UX 专职成员补齐界面质感（该角色上一团队已移除）。
-8. 前端接入正式美术资源时替换 `PreloadScene` 的 Graphics 生成贴图（贴图 key 不变即可平滑替换）。
+5. ~~聊天室进阶功能~~（**音乐/视频同步播放已完成** §6.5）：房间权限管理（成员角色/邀请制）、房间装饰系统待实现。
+6. **插件扩展**：当前内建 `music-sync` / `video-sync` 两个插件，新增插件只需：①在 `plugins.ts` 注册（id/name/icon/component）②在服务端 `socket.ts` 的 `allowedPlugins` 数组加 id ③编写插件 Vue 组件（props: `roomId`，emit: `close`）。
+7. ~~规划 Phase 3（好友/社交、传送门）~~（**好友系统已完成** §6.7）与 Phase 4（交通工具）。剩余 Phase 3：传送门系统、飞鸽传信（pigeon_messages 表已建）。
+8. 建议为前端新增 UI/UX 专职成员补齐界面质感（该角色上一团队已移除）。
+9. 前端接入正式美术资源时替换 `PreloadScene` 的 Graphics 生成贴图（贴图 key 不变即可平滑替换）。

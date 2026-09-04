@@ -16,6 +16,7 @@ import mapRouter from './routes/map.js';
 import resourceRouter from './routes/resource.js';
 import buildRouter from './routes/build.js';
 import chatRouter from './routes/chat.js';
+import friendsRouter from './routes/friends.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -36,6 +37,7 @@ app.use('/map', mapRouter);
 app.use('/resource', resourceRouter);
 app.use('/build', buildRouter);
 app.use('/chat', chatRouter);
+app.use('/friends', friendsRouter);
 
 app.use(errorHandler);
 

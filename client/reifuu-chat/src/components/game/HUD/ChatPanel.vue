@@ -135,6 +135,29 @@ onBeforeUnmount(() => {
       <span v-if="roomStore.members.length === 0" class="member-empty">成员加载中…</span>
     </div>
 
+    <!-- Plugin toolbar -->
+    <div class="plugin-toolbar">
+      <button
+        v-for="plugin in availablePlugins"
+        :key="plugin.id"
+        class="plugin-btn"
+        :class="{ active: activePluginId === plugin.id }"
+        :title="plugin.description"
+        @click="togglePlugin(plugin)"
+      >
+        {{ plugin.icon }} {{ plugin.name }}
+      </button>
+    </div>
+
+    <!-- Plugin container: renders the active plugin component -->
+    <div v-if="activePluginMeta && roomStore.roomId" class="plugin-container">
+      <component
+        :is="activePluginMeta.component"
+        :room-id="roomStore.roomId"
+        @close="closePlugin"
+      />
+    </div>
+
     <div ref="messagesEl" class="chat-messages">
       <p v-if="roomStore.messages.length === 0" class="empty">还没有消息，来说点什么吧</p>
       <div
@@ -311,5 +334,39 @@ onBeforeUnmount(() => {
 
 .chat-input button:hover {
   background: #7fc39b;
+}
+
+/* Plugin toolbar */
+.plugin-toolbar {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.plugin-btn {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #ccc;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.15s;
+}
+
+.plugin-btn:hover {
+  background: rgba(106, 171, 133, 0.15);
+  border-color: #6aab85;
+}
+
+.plugin-btn.active {
+  background: rgba(106, 171, 133, 0.25);
+  border-color: #6aab85;
+  color: #fff;
+}
+
+/* Plugin container */
+.plugin-container {
+  margin-bottom: 6px;
 }
 </style>

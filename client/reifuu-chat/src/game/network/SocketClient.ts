@@ -1,5 +1,6 @@
 import { io, Socket } from 'socket.io-client'
 import { EventBus } from '../EventBus'
+import type { FriendListItemDTO, FriendRequestDTO } from '../../api/types'
 
 export interface ServerToClientEvents {
   echo: (payload: unknown) => void
@@ -26,6 +27,14 @@ export interface ServerToClientEvents {
   'plugin:deactivated': (data: { roomId: string; pluginId: string }) => void
   'plugin:state': (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => void
   'plugin:list': (data: { roomId: string; plugins: Array<{ pluginId: string; state: Record<string, unknown> }> }) => void
+  // Friend events (server -> client)
+  'friend:state': (data: { friends: FriendListItemDTO[]; requests: FriendRequestDTO[] }) => void
+  'friend:request-received': (data: { requestId: number; fromCharacterId: string; fromNickname: string }) => void
+  'friend:request-sent': (data: { requestId: number; toCharacterId: string; toNickname: string }) => void
+  'friend:accepted': (data: { friendCharacterId: string; friendNickname: string }) => void
+  'friend:rejected': (data: { requestId: number }) => void
+  'friend:removed': (data: { characterId: string }) => void
+  'friend:teleport-confirmed': (data: { characterId: string; nickname: string; position: { x: number; y: number }; chunkId: string }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -41,6 +50,13 @@ export interface ClientToServerEvents {
   'plugin:activate': (data: { roomId: string; pluginId: string }) => void
   'plugin:deactivate': (data: { roomId: string; pluginId: string }) => void
   'plugin:state-sync': (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => void
+  // Friend events (client -> server)
+  'friend:request-state': () => void
+  'friend:send-request': (data: { characterId: string }) => void
+  'friend:accept-request': (data: { requestId: number }) => void
+  'friend:reject-request': (data: { requestId: number }) => void
+  'friend:remove': (data: { characterId: string }) => void
+  'friend:teleport': (data: { characterId: string }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -125,6 +141,29 @@ class SocketClient {
     })
     this.socket.on('plugin:list', (data: { roomId: string; plugins: Array<{ pluginId: string; state: Record<string, unknown> }> }) => {
       EventBus.emit('plugin:list', data)
+    })
+
+    // Friend events: forward to EventBus for the friend store / UI
+    this.socket.on('friend:state', (data: { friends: FriendListItemDTO[]; requests: FriendRequestDTO[] }) => {
+      EventBus.emit('friend:state', data)
+    })
+    this.socket.on('friend:request-received', (data: { requestId: number; fromCharacterId: string; fromNickname: string }) => {
+      EventBus.emit('friend:request-received', data)
+    })
+    this.socket.on('friend:request-sent', (data: { requestId: number; toCharacterId: string; toNickname: string }) => {
+      EventBus.emit('friend:request-sent', data)
+    })
+    this.socket.on('friend:accepted', (data: { friendCharacterId: string; friendNickname: string }) => {
+      EventBus.emit('friend:accepted', data)
+    })
+    this.socket.on('friend:rejected', (data: { requestId: number }) => {
+      EventBus.emit('friend:rejected', data)
+    })
+    this.socket.on('friend:removed', (data: { characterId: string }) => {
+      EventBus.emit('friend:removed', data)
+    })
+    this.socket.on('friend:teleport-confirmed', (data: { characterId: string; nickname: string; position: { x: number; y: number }; chunkId: string }) => {
+      EventBus.emit('friend:teleport-confirmed', data)
     })
 
     this.socket.on('disconnect', (reason) => {

@@ -1,4 +1,5 @@
 import mitt from 'mitt'
+import type { FriendListItemDTO, FriendRequestDTO } from '../api/types'
 
 /**
  * Vue <-> Phaser 通信事件表。
@@ -74,6 +75,28 @@ export type GameEvents = {
   'plugin:state': { roomId: string; pluginId: string; state: Record<string, unknown> }
   /** 加入房间时服务端下发当前已激活插件列表 */
   'plugin:list': { roomId: string; plugins: Array<{ pluginId: string; state: Record<string, unknown> }> }
+
+  // Friend events
+  /** 服务端下发好友列表 + 待处理申请 */
+  'friend:state': { friends: FriendListItemDTO[]; requests: FriendRequestDTO[] }
+  /** 收到新的好友申请 */
+  'friend:request-received': { requestId: number; fromCharacterId: string; fromNickname: string }
+  /** 好友申请已发送成功 */
+  'friend:request-sent': { requestId: number; toCharacterId: string; toNickname: string }
+  /** 好友申请被接受（双方都会收到） */
+  'friend:accepted': { friendCharacterId: string; friendNickname: string }
+  /** 好友申请被拒绝 */
+  'friend:rejected': { requestId: number }
+  /** 好友被删除 */
+  'friend:removed': { characterId: string }
+  /** 传送到好友位置成功 */
+  'friend:teleport-confirmed': { characterId: string; nickname: string; position: { x: number; y: number }; chunkId: string }
+  /** UI 请求打开好友面板 */
+  'ui:open-friends': void
+  /** UI 请求打开信箱面板 */
+  'ui:open-mailbox': void
+  /** 点击其他玩家 → 显示信息卡（含加好友按钮） */
+  'ui:show-player-info': { characterId: string; nickname: string }
 }
 
 export const EventBus = mitt<GameEvents>()

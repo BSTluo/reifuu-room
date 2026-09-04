@@ -10,18 +10,28 @@ import { useCharacterStore } from '../stores/character'
 import { useInventoryStore } from '../stores/inventory'
 import { useRoomStore } from '../stores/room'
 import ChatPanel from '../components/game/HUD/ChatPanel.vue'
+import FriendListPanel from '../components/game/HUD/FriendListPanel.vue'
+import MailboxPanel from '../components/game/HUD/MailboxPanel.vue'
+import PlayerInfoCard from '../components/game/HUD/PlayerInfoCard.vue'
 import { apiGet, apiPost, ApiRequestError } from '../api/http'
 import type { BuildTemplateDTO, OwnedChunkDTO } from '../api/types'
+import { registerFriendListeners, useFriendStore } from '../stores/friend'
 
 const userStore = useUserStore()
 const explorationStore = useExplorationStore()
 const characterStore = useCharacterStore()
 const inventoryStore = useInventoryStore()
 const roomStore = useRoomStore()
+const friendStore = useFriendStore()
 
 const phaserReady = ref(false)
 const lastPosition = ref({ x: 0, y: 0 })
 const socketStatus = ref<'idle' | 'connected' | 'disconnected' | 'error'>('idle')
+
+// ---- 好友 / 信箱 ----
+const showFriends = ref(false)
+const showMailbox = ref(false)
+const selectedPlayer = ref<{ characterId: string; nickname: string } | null>(null)
 
 // ---- 背包 / 建造 ----
 const showInventory = ref(false)
@@ -143,6 +153,25 @@ function onEnterRoom(payload: { roomId: string }) {
   roomStore.enterRoom(payload.roomId)
 }
 
+// ---- 好友 ----
+function onShowPlayerInfo(payload: { characterId: string; nickname: string }) {
+  selectedPlayer.value = payload
+}
+
+function closePlayerInfo() {
+  selectedPlayer.value = null
+}
+
+function onFriendRequestReceived(payload: { fromNickname: string }) {
+  // 打开信箱时显示；这里用 toast 提示
+  onToast({ message: `${payload.fromNickname} 向你发送了好友申请！`, type: 'success' })
+  friendStore.requestState()
+}
+
+function onFriendTeleportConfirmed(payload: { nickname: string }) {
+  onToast({ message: `已传送到 ${payload.nickname} 身边！`, type: 'success' })
+}
+
 const toast = ref<{ text: string; type: string } | null>(null)
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -180,6 +209,12 @@ onMounted(() => {
   EventBus.on('player:chunk-changed', onChunkChanged)
   EventBus.on('game:toast', onToast)
   EventBus.on('ui:enter-room', onEnterRoom)
+  EventBus.on('ui:show-player-info', onShowPlayerInfo)
+  EventBus.on('friend:request-received', onFriendRequestReceived)
+  EventBus.on('friend:teleport-confirmed', onFriendTeleportConfirmed)
+
+  // 注册好友 store 的 EventBus 监听
+  registerFriendListeners()
 
   // 迷雾 store 先在 socket 建立前监听，确保不遗漏 map:initial-explored / map:explore 事件
   explorationStore.startListening()
@@ -203,6 +238,9 @@ onBeforeUnmount(() => {
   EventBus.off('player:chunk-changed', onChunkChanged)
   EventBus.off('game:toast', onToast)
   EventBus.off('ui:enter-room', onEnterRoom)
+  EventBus.off('ui:show-player-info', onShowPlayerInfo)
+  EventBus.off('friend:request-received', onFriendRequestReceived)
+  EventBus.off('friend:teleport-confirmed', onFriendTeleportConfirmed)
   if (toastTimer) clearTimeout(toastTimer)
   explorationStore.stopListening()
   socketClient.disconnect()
@@ -240,6 +278,17 @@ onBeforeUnmount(() => {
           🎒 背包 ({{ inventoryStore.usedSlots }}/{{ inventoryStore.capacity }})
         </button>
         <button class="action-btn" @click="openBuildMenu">🏠 建造</button>
+        <button class="action-btn" @click="showFriends = !showFriends">
+          👥 好友 ({{ friendStore.friends.length }})
+        </button>
+        <button
+          class="action-btn"
+          :class="{ 'has-badge': friendStore.unreadRequestCount > 0 }"
+          @click="showMailbox = !showMailbox"
+        >
+          📬 信箱
+          <span v-if="friendStore.unreadRequestCount > 0" class="mail-badge">{{ friendStore.unreadRequestCount }}</span>
+        </button>
       </div>
 
       <div v-if="roomStore.inRoom" class="panel chat-panel-wrap">
@@ -304,6 +353,22 @@ onBeforeUnmount(() => {
           </ul>
         </div>
       </div>
+
+      <div v-if="showFriends" class="panel">
+        <FriendListPanel />
+      </div>
+
+      <div v-if="showMailbox" class="panel">
+        <MailboxPanel />
+      </div>
+    </div>
+
+    <div v-if="selectedPlayer" class="player-info-overlay" @click.self="closePlayerInfo">
+      <PlayerInfoCard
+        :character-id="selectedPlayer.characterId"
+        :nickname="selectedPlayer.nickname"
+        @close="closePlayerInfo"
+      />
     </div>
   </div>
 </template>
@@ -353,10 +418,12 @@ onBeforeUnmount(() => {
 }
 .action-panel {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .action-btn {
-  flex: 1;
+  flex: 1 1 calc(50% - 3px);
+  min-width: 70px;
   padding: 8px;
   background: #2a3540;
   color: #fff;
@@ -364,9 +431,39 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
+  position: relative;
 }
 .action-btn:hover {
   background: #35434f;
+}
+.action-btn.has-badge {
+  border-color: #ef5350;
+}
+.mail-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: #ef5350;
+  color: #fff;
+  font-size: 10px;
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 8px;
+  padding: 0 3px;
+}
+.player-info-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
 }
 .panel {
   background: #1c242b;

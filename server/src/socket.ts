@@ -11,7 +11,26 @@ import InventoryService from './services/InventoryService.js';
 import ChatMessageService from './services/ChatMessageService.js';
 import PluginService from './services/PluginService.js';
 import BuildService from './services/BuildService.js';
+import FriendService from './services/FriendService.js';
 import { query } from './db/mysql.js';
+
+/**
+ * In-memory map: characterId → Set<socketId>.
+ * Used to deliver friend notifications to the correct socket(s) even when
+ * the target is in a different chunk room.
+ */
+const characterSocketMap = new Map<string, Set<string>>();
+
+/** Find a socket for a given characterId (returns the first connected one). */
+function getSocketForCharacter(io: SocketIOServer, characterId: string): Socket | null {
+  const socketIds = characterSocketMap.get(characterId);
+  if (!socketIds || socketIds.size === 0) return null;
+  for (const sid of socketIds) {
+    const s = io.sockets.sockets.get(sid);
+    if (s) return s;
+  }
+  return null;
+}
 
 interface SocketData {
   user: {
@@ -400,14 +419,201 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       const updatedState = PluginService.updateState(roomId, pluginId, data.state);
       if (updatedState) {
         const roomKey = `room:${roomId}`;
-        // Broadcast to everyone EXCEPT the sender (they already applied locally)
-        socket.to(roomKey).emit('plugin:state', { roomId, pluginId, state: updatedState });
+        // Broadcast to EVERYONE in the room (including sender) so all clients
+        // stay in sync through the same code path.
+        io.to(roomKey).emit('plugin:state', { roomId, pluginId, state: updatedState });
+      }
+    });
+
+    // ---- Friend system events ----
+    // Real-time friend notifications. The REST API in routes/friends.ts is
+    // the primary path for requests/accept/reject/remove; the socket path
+    // exists to deliver in-page notifications + handle teleport (which needs
+    // chunk-room switching, like player:move does).
+
+    // Client explicitly asks for its current friend state (list + pending
+    // requests). Sent by the friend panel when it opens.
+    socket.on('friend:request-state', async () => {
+      if (!character) return;
+      try {
+        const friends = await FriendService.getFriendList(character.id);
+        const requests = await FriendService.getPendingRequests(character.id);
+        socket.emit('friend:state', { friends, requests });
+      } catch (error: any) {
+        logger.error('Friend state error', error);
+        socket.emit('error', { message: error.message || 'Failed to load friend state' });
+      }
+    });
+
+    // Send a friend request (socket path — notifies the target in real time)
+    socket.on('friend:send-request', async (data: { characterId: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const result = await FriendService.sendRequest(character.id, String(data?.characterId ?? ''));
+        socket.emit('friend:request-sent', {
+          requestId: result.requestId,
+          toCharacterId: String(data?.characterId),
+          toNickname: result.toNickname,
+        });
+        // Notify the target if they are online
+        const targetSocket = getSocketForCharacter(io, String(data?.characterId));
+        if (targetSocket) {
+          targetSocket.emit('friend:request-received', {
+            requestId: result.requestId,
+            fromCharacterId: character.id,
+            fromNickname: character.nickname,
+          });
+        }
+      } catch (error: any) {
+        logger.error('Friend request error', error);
+        socket.emit('error', { message: error.message || 'Failed to send friend request' });
+      }
+    });
+
+    // Accept a friend request (socket path — notifies the requester in real time)
+    socket.on('friend:accept-request', async (data: { requestId: number }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const result = await FriendService.acceptRequest(Number(data?.requestId), character.id);
+        socket.emit('friend:accepted', {
+          friendCharacterId: result.friendCharacterId,
+          friendNickname: result.friendNickname,
+        });
+        // Notify the original requester if they are online
+        const requesterSocket = getSocketForCharacter(io, result.friendCharacterId);
+        if (requesterSocket) {
+          requesterSocket.emit('friend:accepted', {
+            friendCharacterId: character.id,
+            friendNickname: character.nickname,
+          });
+        }
+      } catch (error: any) {
+        logger.error('Friend accept error', error);
+        socket.emit('error', { message: error.message || 'Failed to accept friend request' });
+      }
+    });
+
+    // Reject a friend request (socket path)
+    socket.on('friend:reject-request', async (data: { requestId: number }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        await FriendService.rejectRequest(Number(data?.requestId), character.id);
+        socket.emit('friend:rejected', { requestId: Number(data?.requestId) });
+      } catch (error: any) {
+        logger.error('Friend reject error', error);
+        socket.emit('error', { message: error.message || 'Failed to reject friend request' });
+      }
+    });
+
+    // Remove a friend (socket path — notifies the other side in real time)
+    socket.on('friend:remove', async (data: { characterId: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      const friendCharacterId = String(data?.characterId ?? '');
+      try {
+        await FriendService.removeFriend(character.id, friendCharacterId);
+        socket.emit('friend:removed', { characterId: friendCharacterId });
+        const friendSocket = getSocketForCharacter(io, friendCharacterId);
+        if (friendSocket) {
+          friendSocket.emit('friend:removed', { characterId: character.id });
+        }
+      } catch (error: any) {
+        logger.error('Friend remove error', error);
+        socket.emit('error', { message: error.message || 'Failed to remove friend' });
+      }
+    });
+
+    // Teleport to a friend's location. Server-side authoritative teleport:
+    // validates friendship + cooldown, moves the player, switches the
+    // chunk room, and notifies both chunks (mirrors the player:move logic).
+    socket.on('friend:teleport', async (data: { characterId: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      const friendCharacterId = String(data?.characterId ?? '');
+      try {
+        const target = await FriendService.teleportToFriend(character.id, friendCharacterId);
+
+        const oldChunkId = character.chunkId;
+        const chunkChanged = oldChunkId !== target.chunkId;
+
+        if (chunkChanged) {
+          // Leave old chunk room + notify old chunk
+          socket.leave(oldChunkId);
+          socket.to(oldChunkId).emit('player:leave-chunk', { characterId: character.id });
+
+          // Join new chunk room
+          socket.join(target.chunkId);
+          character.chunkId = target.chunkId;
+
+          logger.info(
+            `${character.nickname} teleported from chunk ${oldChunkId} to ${target.chunkId}`
+          );
+
+          // Explore the destination chunk area (fog of war)
+          const newlyExplored = await ExplorationService.exploreArea(character.id, target.chunkId, 1);
+          if (newlyExplored.length > 0) {
+            socket.emit('map:explore', { chunks: newlyExplored });
+          }
+
+          // Get players in new chunk
+          const playersInNewChunk = await MovementService.getPlayersInChunk(target.chunkId);
+          const otherPlayers = playersInNewChunk.filter(p => p.characterId !== character.id);
+          socket.emit('players:in-chunk', {
+            players: otherPlayers.map(p => ({
+              characterId: p.characterId,
+              nickname: p.nickname,
+              position: p.position,
+            })),
+          });
+
+          // Notify new chunk that this player entered
+          socket.to(target.chunkId).emit('player:enter-chunk', {
+            characterId: character.id,
+            nickname: character.nickname,
+            position: target.position,
+          });
+        }
+
+        // Confirm to the teleporting client
+        socket.emit('friend:teleport-confirmed', {
+          characterId: friendCharacterId,
+          nickname: target.nickname,
+          position: target.position,
+          chunkId: target.chunkId,
+        });
+      } catch (error: any) {
+        logger.error('Friend teleport error', error);
+        socket.emit('error', { message: error.message || 'Teleport failed' });
       }
     });
 
     // ---- Disconnect handler ----
     socket.on('disconnect', (reason) => {
       logger.info(`Client disconnected: ${user?.username} (${socket.id}), reason: ${reason}`);
+
+      // Remove from the character→socket map
+      if (character) {
+        const sockets = characterSocketMap.get(character.id);
+        if (sockets) {
+          sockets.delete(socket.id);
+          if (sockets.size === 0) {
+            characterSocketMap.delete(character.id);
+          }
+        }
+      }
 
       // Stop the Redis position-cache refresher for this socket
       const timer = (socket.data as SocketData).cacheRefreshTimer;
@@ -440,6 +646,15 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
     if (character) {
       socket.join(character.chunkId);
       logger.info(`${character.nickname} joined chunk room: ${character.chunkId}`);
+
+      // Register this socket so friend notifications can reach this character
+      // even from another chunk.
+      const existing = characterSocketMap.get(character.id);
+      if (existing) {
+        existing.add(socket.id);
+      } else {
+        characterSocketMap.set(character.id, new Set([socket.id]));
+      }
 
       // Get current position and ensure it's cached in Redis so other players
       // in this chunk can discover this player (a player who has never moved

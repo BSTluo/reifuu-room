@@ -92,3 +92,34 @@ export interface RoomMemberDTO {
   characterId: string
   nickname: string
 }
+
+// ---- Friend system DTOs ----
+
+export interface FriendListItemDTO {
+  characterId: string
+  nickname: string
+  continent: string
+  chunkId: string
+  isOnline: boolean
+  createdAt: string
+}
+
+export interface FriendRequestDTO {
+  id: number
+  fromCharacterId: string
+  fromNickname: string
+  status: string
+  createdAt: string
+}
+
+export interface FriendStateDTO {
+  friends: FriendListItemDTO[]
+  requests: FriendRequestDTO[]
+}
+
+export interface FriendTeleportResultDTO {
+  characterId: string
+  nickname: string
+  position: { x: number; y: number }
+  chunkId: string
+}

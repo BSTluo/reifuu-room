@@ -165,3 +165,50 @@ CREATE TABLE IF NOT EXISTS explored_chunks (
     INDEX idx_character (character_id),
     FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Friendships table (GDD 2.7 好友系统)
+-- 单条记录表示双向好友关系，character_id_1 < character_id_2 保证唯一
+CREATE TABLE IF NOT EXISTS friendships (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    character_id_1 INT NOT NULL,
+    character_id_2 INT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY idx_pair (character_id_1, character_id_2),
+    INDEX idx_char1 (character_id_1),
+    INDEX idx_char2 (character_id_2),
+    FOREIGN KEY (character_id_1) REFERENCES characters(id) ON DELETE CASCADE,
+    FOREIGN KEY (character_id_2) REFERENCES characters(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Friend requests table (GDD 2.7 好友申请流程)
+-- 唯一约束不放在表上（MySQL 5.7 生成列与外键不兼容），而是在 FriendService.sendRequest
+-- 中用显式查询检查是否存在 pending 请求。这样同一对好友可以保留多条
+-- accepted/rejected 历史记录，避免重复 accept 时触发唯一键冲突。
+CREATE TABLE IF NOT EXISTS friend_requests (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    from_character_id INT NOT NULL,
+    to_character_id INT NOT NULL,
+    status ENUM('pending', 'accepted', 'rejected') NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    responded_at TIMESTAMP NULL,
+    INDEX idx_pair_pending (from_character_id, to_character_id, status),
+    INDEX idx_to_status (to_character_id, status),
+    INDEX idx_from_status (from_character_id, status),
+    FOREIGN KEY (from_character_id) REFERENCES characters(id) ON DELETE CASCADE,
+    FOREIGN KEY (to_character_id) REFERENCES characters(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Pigeon messages table (GDD 2.7 飞鸽传信)
+CREATE TABLE IF NOT EXISTS pigeon_messages (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    from_character_id INT NOT NULL,
+    to_character_id INT NOT NULL,
+    content VARCHAR(200) NOT NULL,
+    status ENUM('sending', 'delivered', 'read') NOT NULL DEFAULT 'sending',
+    deliver_at TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_to_status (to_character_id, status),
+    INDEX idx_from (from_character_id),
+    FOREIGN KEY (from_character_id) REFERENCES characters(id) ON DELETE CASCADE,
+    FOREIGN KEY (to_character_id) REFERENCES characters(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

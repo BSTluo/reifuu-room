@@ -1,8 +1,10 @@
 import Phaser from 'phaser'
+import { EventBus } from '../EventBus'
 import { applyIsoDepth } from '../utils/isometric'
 
 /**
  * 其他玩家精灵：渲染同区块内的其他玩家，显示昵称，支持平滑插值移动。
+ * 可点击：点击后通过 EventBus 发出 ui:show-player-info（用于加好友等）。
  */
 export class OtherPlayerSprite extends Phaser.GameObjects.Container {
   private sprite: Phaser.GameObjects.Sprite
@@ -11,7 +13,13 @@ export class OtherPlayerSprite extends Phaser.GameObjects.Container {
   private targetY: number
   private readonly moveSpeed = 160 // 像素/秒
 
-  constructor(scene: Phaser.Scene, x: number, y: number, nickname: string) {
+  constructor(
+    scene: Phaser.Scene,
+    x: number,
+    y: number,
+    nickname: string,
+    private readonly characterId: string
+  ) {
     super(scene, x, y)
 
     // 角色精灵（使用与本地玩家相同的占位贴图）
@@ -33,6 +41,18 @@ export class OtherPlayerSprite extends Phaser.GameObjects.Container {
 
     this.targetX = x
     this.targetY = y
+
+    // 点击查看玩家信息（加好友等交互）
+    this.setInteractive(
+      new Phaser.Geom.Rectangle(-16, -56, 32, 64),
+      Phaser.Geom.Rectangle.Contains
+    )
+    this.on('pointerdown', () => {
+      EventBus.emit('ui:show-player-info', {
+        characterId: this.characterId,
+        nickname,
+      })
+    })
 
     applyIsoDepth(this)
   }

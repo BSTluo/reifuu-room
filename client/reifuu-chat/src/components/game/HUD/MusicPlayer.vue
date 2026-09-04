@@ -1,15 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { EventBus } from '../../../../game/EventBus'
-import { usePluginStore } from '../../../../stores/plugin'
-import { useRoomStore } from '../../../../stores/room'
-import { useCharacterStore } from '../../../../stores/character'
+import { EventBus } from '../../../game/EventBus'
+import { usePluginStore } from '../../../stores/plugin'
+import { useCharacterStore } from '../../../stores/character'
 
 const props = defineProps<{ roomId: string }>()
 const emit = defineEmits<{ close: [] }>()
 
 const pluginStore = usePluginStore()
-const roomStore = useRoomStore()
 const characterStore = useCharacterStore()
 
 const PLUGIN_ID = 'music-sync'
@@ -26,7 +24,7 @@ const duration = ref(0)
 // Whether this client is the controller (whoever activated the plugin, or room owner)
 const isController = computed(() => {
   const state = pluginStore.getPluginState(props.roomId, PLUGIN_ID)
-  return state?.controllerId === characterStore.characterId
+  return String(state?.controllerId) === String(characterStore.characterId)
 })
 
 const currentTrack = computed(() => {

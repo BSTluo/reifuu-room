@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { EventBus } from '../../../../game/EventBus'
-import { usePluginStore } from '../../../../stores/plugin'
-import { useCharacterStore } from '../../../../stores/character'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { EventBus } from '../../../game/EventBus'
+import { usePluginStore } from '../../../stores/plugin'
+import { useCharacterStore } from '../../../stores/character'
 
 const props = defineProps<{ roomId: string }>()
 const emit = defineEmits<{ close: [] }>()
@@ -34,11 +34,12 @@ interface YTPlayer {
 
 const playerEl = ref<HTMLDivElement | null>(null)
 let ytPlayer: YTPlayer | null = null
+let playerReady = false
 let progressInterval: ReturnType<typeof setInterval> | null = null
 
 const isController = computed(() => {
   const state = pluginStore.getPluginState(props.roomId, PLUGIN_ID)
-  return state?.controllerId === characterStore.characterId
+  return String(state?.controllerId) === String(characterStore.characterId)
 })
 
 const currentVideo = computed(() => {
@@ -88,6 +89,7 @@ function createPlayer(videoId: string) {
     ytPlayer.destroy()
     ytPlayer = null
   }
+  playerReady = false
   if (!playerEl.value) return
 
   const YT = (window as any).YT
@@ -103,6 +105,7 @@ function createPlayer(videoId: string) {
     },
     events: {
       onReady: () => {
+        playerReady = true
         duration.value = ytPlayer?.getDuration() ?? 0
         // Apply current plugin state
         applyRemoteState()
@@ -130,7 +133,7 @@ function createPlayer(videoId: string) {
 // --- sync from plugin store -> local player ---
 function applyRemoteState() {
   const state = pluginStore.getPluginState(props.roomId, PLUGIN_ID)
-  if (!state || !ytPlayer) return
+  if (!state || !ytPlayer || !playerReady) return
 
   const playing = state.playing === true
   const pos = typeof state.position === 'number' ? state.position : 0
@@ -180,7 +183,7 @@ function togglePlay() {
 }
 
 function broadcastState() {
-  if (isController.value && ytPlayer) {
+  if (isController.value && ytPlayer && playerReady) {
     pluginStore.syncPluginState(props.roomId, PLUGIN_ID, {
       playing: isPlaying.value,
       position: ytPlayer.getCurrentTime(),
@@ -191,7 +194,7 @@ function broadcastState() {
 function startProgressBroadcast() {
   stopProgressBroadcast()
   progressInterval = setInterval(() => {
-    if (ytPlayer && isController.value) {
+    if (ytPlayer && playerReady && isController.value) {
       currentTime.value = ytPlayer.getCurrentTime()
       duration.value = ytPlayer.getDuration()
       pluginStore.syncPluginState(props.roomId, PLUGIN_ID, {
