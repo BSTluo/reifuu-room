@@ -1,5 +1,5 @@
 import mitt from 'mitt'
-import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO } from '../api/types'
+import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO, FurnitureItemDTO } from '../api/types'
 
 /**
  * Vue <-> Phaser 通信事件表。
@@ -75,6 +75,20 @@ export type GameEvents = {
   'plugin:state': { roomId: string; pluginId: string; state: Record<string, unknown> }
   /** 加入房间时服务端下发当前已激活插件列表 */
   'plugin:list': { roomId: string; plugins: Array<{ pluginId: string; state: Record<string, unknown> }> }
+
+  // Furniture (house interior) events
+  /** 服务端下发房间家具布局 */
+  'room:furniture': { roomId: string; furniture: FurnitureItemDTO[] }
+  /** 房间内家具变更广播（摆放/移动/移除） */
+  'room:furniture-changed': {
+    roomId: string
+    action: 'placed' | 'moved' | 'removed'
+    furniture: FurnitureItemDTO
+  }
+  /** 点击带插件的家具 → 激活对应插件 */
+  'ui:activate-furniture-plugin': { roomId: string; pluginId: string; furnitureId: string }
+  /** UI 请求退出房间内部 → 返回大世界 */
+  'ui:exit-room-interior': void
 
   // Friend events
   /** 服务端下发好友列表 + 待处理申请 */

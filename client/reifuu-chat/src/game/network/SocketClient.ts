@@ -1,6 +1,6 @@
 import { io, Socket } from 'socket.io-client'
 import { EventBus } from '../EventBus'
-import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO } from '../../api/types'
+import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO, FurnitureItemDTO } from '../../api/types'
 
 export interface ServerToClientEvents {
   echo: (payload: unknown) => void
@@ -52,6 +52,9 @@ export interface ServerToClientEvents {
   'team:kicked': (data: { teamId: number; teamName: string }) => void
   'team:disbanded': (data: { teamId: number; teamName: string }) => void
   'team:chat-message': (data: TeamChatMessageDTO) => void
+  // Furniture events (server -> client)
+  'room:furniture': (data: { roomId: string; furniture: FurnitureItemDTO[] }) => void
+  'room:furniture-changed': (data: { roomId: string; action: 'placed' | 'moved' | 'removed'; furniture: FurnitureItemDTO }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -92,6 +95,9 @@ export interface ClientToServerEvents {
   'team:transfer': (data: { characterId: string }) => void
   'team:disband': () => void
   'team:chat': (data: { content: string }) => void
+  // Furniture events (client -> server)
+  'room:furniture-request': (data: { roomId: string }) => void
+  'room:furniture-changed': (data: { roomId: string; action: 'placed' | 'moved' | 'removed'; furniture: FurnitureItemDTO }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -176,6 +182,14 @@ class SocketClient {
     })
     this.socket.on('plugin:list', (data: { roomId: string; plugins: Array<{ pluginId: string; state: Record<string, unknown> }> }) => {
       EventBus.emit('plugin:list', data)
+    })
+
+    // Furniture events: forward to EventBus for the interior store / scene
+    this.socket.on('room:furniture', (data: { roomId: string; furniture: FurnitureItemDTO[] }) => {
+      EventBus.emit('room:furniture', data)
+    })
+    this.socket.on('room:furniture-changed', (data: { roomId: string; action: 'placed' | 'moved' | 'removed'; furniture: FurnitureItemDTO }) => {
+      EventBus.emit('room:furniture-changed', data)
     })
 
     // Friend events: forward to EventBus for the friend store / UI

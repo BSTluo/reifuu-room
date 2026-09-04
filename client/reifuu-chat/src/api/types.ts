@@ -93,6 +93,28 @@ export interface RoomMemberDTO {
   nickname: string
 }
 
+// ---- House interior (furniture) DTOs ----
+
+export interface FurnitureItemDTO {
+  id: string
+  type: string
+  x: number
+  y: number
+  rotation: number
+  placedBy: string
+  createdAt: number
+}
+
+export interface FurnitureCatalogEntryDTO {
+  type: string
+  name: string
+  icon: string
+  width: number
+  height: number
+  pluginId: string | null
+  memberPlaceable: boolean
+}
+
 // ---- Friend system DTOs ----
 
 export interface FriendListItemDTO {

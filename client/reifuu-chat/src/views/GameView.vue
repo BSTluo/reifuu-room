@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import PhaserCanvas from '../components/game/PhaserCanvas.vue'
 import Minimap from '../components/game/Minimap.vue'
+import InteriorView from '../components/game/HUD/InteriorView.vue'
 import { EventBus } from '../game/EventBus'
 import { socketClient } from '../game/network/SocketClient'
 import { useUserStore } from '../stores/user'
@@ -9,7 +10,7 @@ import { useExplorationStore } from '../stores/exploration'
 import { useCharacterStore } from '../stores/character'
 import { useInventoryStore } from '../stores/inventory'
 import { useRoomStore } from '../stores/room'
-import ChatPanel from '../components/game/HUD/ChatPanel.vue'
+import { useInteriorStore } from '../stores/interior'
 import FriendListPanel from '../components/game/HUD/FriendListPanel.vue'
 import MailboxPanel from '../components/game/HUD/MailboxPanel.vue'
 import PigeonMailPanel from '../components/game/HUD/PigeonMailPanel.vue'
@@ -26,6 +27,7 @@ const explorationStore = useExplorationStore()
 const characterStore = useCharacterStore()
 const inventoryStore = useInventoryStore()
 const roomStore = useRoomStore()
+const interiorStore = useInteriorStore()
 const friendStore = useFriendStore()
 const pigeonStore = usePigeonStore()
 const teamStore = useTeamStore()
@@ -156,9 +158,21 @@ function onToast(payload: { message: string; type?: 'info' | 'warn' | 'error' | 
   }, 2000)
 }
 
-// ---- 聊天室 ----
-function onEnterRoom(payload: { roomId: string }) {
-  roomStore.enterRoom(payload.roomId)
+// ---- 聊天室（房间内部） ----
+async function onEnterRoom(payload: { roomId: string }) {
+  // 先初始化家具 store（目录 + socket 监听），再进入房间
+  interiorStore.init()
+  await roomStore.enterRoom(payload.roomId)
+  // 仅在成功进入房间后切换场景
+  if (roomStore.inRoom) {
+    EventBus.emit('ui:request-scene', { sceneKey: 'InteriorScene' })
+  }
+}
+
+function onExitRoomInterior() {
+  // 返回大世界场景
+  EventBus.emit('ui:request-scene', { sceneKey: 'WorldScene' })
+  interiorStore.dispose()
 }
 
 // ---- 好友 ----
@@ -221,6 +235,7 @@ onMounted(() => {
   EventBus.on('player:chunk-changed', onChunkChanged)
   EventBus.on('game:toast', onToast)
   EventBus.on('ui:enter-room', onEnterRoom)
+  EventBus.on('ui:exit-room-interior', onExitRoomInterior)
   EventBus.on('ui:show-player-info', onShowPlayerInfo)
   EventBus.on('friend:request-received', onFriendRequestReceived)
   EventBus.on('friend:teleport-confirmed', onFriendTeleportConfirmed)
@@ -255,6 +270,7 @@ onBeforeUnmount(() => {
   EventBus.off('player:chunk-changed', onChunkChanged)
   EventBus.off('game:toast', onToast)
   EventBus.off('ui:enter-room', onEnterRoom)
+  EventBus.off('ui:exit-room-interior', onExitRoomInterior)
   EventBus.off('ui:show-player-info', onShowPlayerInfo)
   EventBus.off('friend:request-received', onFriendRequestReceived)
   EventBus.off('friend:teleport-confirmed', onFriendTeleportConfirmed)
@@ -275,6 +291,8 @@ onBeforeUnmount(() => {
       <div v-if="toast" class="toast" :class="`toast-${toast.type}`">
         {{ toast.text }}
       </div>
+      <!-- 房间内部 UI 覆盖层（进入房间时显示） -->
+      <InteriorView v-if="roomStore.inRoom" />
     </div>
     <div class="side-panel">
       <div class="debug-panel">
@@ -319,10 +337,6 @@ onBeforeUnmount(() => {
           👥 团队
           <span v-if="teamStore.inTeam" class="team-badge">{{ teamStore.members.length }}</span>
         </button>
-      </div>
-
-      <div v-if="roomStore.inRoom" class="panel chat-panel-wrap">
-        <ChatPanel />
       </div>
 
       <div v-if="showInventory" class="panel">

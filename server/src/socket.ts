@@ -426,7 +426,7 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       const pluginId = String(data?.pluginId ?? '');
       if (!/^\d+$/.test(roomId) || !pluginId) return;
 
-      const allowedPlugins = ['music-sync', 'video-sync'];
+      const allowedPlugins = ['music-sync', 'video-sync', 'radio-fm', 'doudizhu'];
       if (!allowedPlugins.includes(pluginId)) {
         socket.emit('error', { message: `Unknown plugin: ${pluginId}` });
         return;
@@ -482,6 +482,44 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
         // stay in sync through the same code path.
         io.to(roomKey).emit('plugin:state', { roomId, pluginId, state: updatedState });
       }
+    });
+
+    // ---- Furniture (room interior) events ----
+    // Real-time furniture sync. The REST API in routes/room.ts is the primary
+    // path for place/move/remove; the socket path broadcasts changes to all
+    // room members so their interior scenes stay in sync.
+
+    // Client requests the current furniture layout (sent on entering a room)
+    socket.on('room:furniture-request', async (data: { roomId: string }) => {
+      if (!character) return;
+      const roomId = String(data?.roomId ?? '');
+      if (!/^\d+$/.test(roomId)) return;
+      try {
+        const { default: RoomService } = await import('./services/RoomService.js');
+        const furniture = await RoomService.getFurniture(roomId);
+        socket.emit('room:furniture', { roomId, furniture });
+      } catch (error: any) {
+        logger.error('Furniture request error', error);
+        socket.emit('error', { message: error.message || 'Failed to load furniture' });
+      }
+    });
+
+    // Broadcast a furniture change to all room members
+    socket.on('room:furniture-changed', (data: {
+      roomId: string;
+      action: 'placed' | 'moved' | 'removed';
+      furniture: any;
+    }) => {
+      if (!character) return;
+      const roomId = String(data?.roomId ?? '');
+      const action = String(data?.action ?? '');
+      if (!/^\d+$/.test(roomId) || !['placed', 'moved', 'removed'].includes(action)) return;
+      const roomKey = `room:${roomId}`;
+      io.to(roomKey).emit('room:furniture-changed', {
+        roomId,
+        action,
+        furniture: data.furniture,
+      });
     });
 
     // ---- Friend system events ----

@@ -102,6 +102,7 @@ export class WorldScene extends Phaser.Scene {
 
     EventBus.on('ui:move-player', this.onUIMovePlayer)
     EventBus.on('ui:spawn-character', this.onUISpawnCharacter)
+    EventBus.on('ui:request-scene', this.onRequestScene)
     EventBus.on('exploration:updated', this.onExplorationUpdated)
     EventBus.on('resource:collected', this.onResourceCollected)
     EventBus.on('resource:node-depleted', this.onResourceNodeDepleted)
@@ -161,6 +162,7 @@ export class WorldScene extends Phaser.Scene {
     this.input.off('pointerdown', this.onPointerDown, this)
     EventBus.off('ui:move-player', this.onUIMovePlayer)
     EventBus.off('ui:spawn-character', this.onUISpawnCharacter)
+    EventBus.off('ui:request-scene', this.onRequestScene)
     EventBus.off('exploration:updated', this.onExplorationUpdated)
     EventBus.off('socket:connected', this.onSocketConnected)
     EventBus.off('resource:collected', this.onResourceCollected)
@@ -173,6 +175,16 @@ export class WorldScene extends Phaser.Scene {
     this.clearResourceSprites()
     this.clearRoomSprites()
     this.destroyAllChunks()
+  }
+
+  // ==================== 场景切换 ====================
+
+  /** UI 请求切换场景（进入房间内部 / 返回大世界） */
+  private onRequestScene = (payload: { sceneKey: string }): void => {
+    if (payload.sceneKey === 'InteriorScene') {
+      // 停止世界场景（shutdown 会自动调用），启动室内场景
+      this.scene.start('InteriorScene')
+    }
   }
 
   // ==================== 区块渲染 ====================
