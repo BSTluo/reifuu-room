@@ -109,6 +109,7 @@ export class WorldScene extends Phaser.Scene {
     EventBus.on('player:chunk-changed', this.onPlayerChunkChangedForResources)
     EventBus.on('player:chunk-changed', this.onPlayerChunkChangedForRooms)
     EventBus.on('build:created', this.onBuildCreated)
+    EventBus.on('build:abandoned', this.onBuildAbandoned)
     EventBus.on('friend:teleport-confirmed', this.onFriendTeleportConfirmed)
     EventBus.on('town:teleport-confirmed', this.onTownTeleportConfirmed)
 
@@ -171,6 +172,7 @@ export class WorldScene extends Phaser.Scene {
     EventBus.off('player:chunk-changed', this.onPlayerChunkChangedForResources)
     EventBus.off('player:chunk-changed', this.onPlayerChunkChangedForRooms)
     EventBus.off('build:created', this.onBuildCreated)
+    EventBus.off('build:abandoned', this.onBuildAbandoned)
     EventBus.off('friend:teleport-confirmed', this.onFriendTeleportConfirmed)
     EventBus.off('town:teleport-confirmed', this.onTownTeleportConfirmed)
     this.cleanupMultiplayerSync()
@@ -573,6 +575,12 @@ export class WorldScene extends Phaser.Scene {
 
   /** 建造完成：立即刷新当前区块房屋标记 */
   private onBuildCreated = (payload: { chunkId: string; chatRoomId: number }) => {
+    if (payload.chunkId === this.currentChunkId) {
+      this.loadChunkRooms(payload.chunkId)
+    }
+  }
+
+  private onBuildAbandoned = (payload: { chunkId: string }) => {
     if (payload.chunkId === this.currentChunkId) {
       this.loadChunkRooms(payload.chunkId)
     }

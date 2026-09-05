@@ -1,11 +1,10 @@
 import Phaser from 'phaser'
 import { EventBus } from '../EventBus'
-import { socketClient } from '../network/SocketClient'
 import { useInteriorStore, ROOM_GRID_WIDTH, ROOM_GRID_HEIGHT } from '../../stores/interior'
 import { useRoomStore } from '../../stores/room'
 import { useCharacterStore } from '../../stores/character'
 import { TILE_WIDTH, TILE_HEIGHT } from '../utils/isometric'
-import type { FurnitureItemDTO, FurnitureCatalogEntryDTO } from '../../api/types'
+import type { FurnitureItemDTO } from '../../api/types'
 
 /** Interior tile size (same as world tiles for consistency) */
 const ITILE_W = TILE_WIDTH
@@ -511,7 +510,6 @@ export class InteriorScene extends Phaser.Scene {
       const item = this.nearbyPluginFurniture
       const visual = FURNITURE_VISUALS[item.type]
       const w = visual?.w ?? 1
-      const h = visual?.h ?? 1
       const fx = item.x * ITILE_W + (w * ITILE_W) / 2
       const fy = item.y * ITILE_H
       const catalogEntry = store.catalog.find((c) => c.type === item.type)

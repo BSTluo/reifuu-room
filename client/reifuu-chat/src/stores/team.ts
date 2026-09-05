@@ -207,12 +207,12 @@ export const useTeamStore = defineStore('team', {
       this.members = this.members.filter((m) => m.characterId !== data.characterId)
     },
 
-    onKicked(data: { teamId: number; teamName: string }) {
+    onKicked(_data: { teamId: number; teamName: string }) {
       // 自己被踢出：清空团队状态
       this.resetTeam()
     },
 
-    onDisbanded(data: { teamId: number; teamName: string }) {
+    onDisbanded(_data: { teamId: number; teamName: string }) {
       // 团队解散：清空团队状态
       this.resetTeam()
     },

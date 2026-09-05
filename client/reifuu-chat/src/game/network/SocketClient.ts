@@ -1,6 +1,6 @@
 import { io, Socket } from 'socket.io-client'
 import { EventBus } from '../EventBus'
-import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO, FurnitureItemDTO } from '../../api/types'
+import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO, FurnitureItemDTO, FriendChatMessageDTO } from '../../api/types'
 import type { TownDTO } from '../EventBus'
 
 export interface ServerToClientEvents {
@@ -39,6 +39,9 @@ export interface ServerToClientEvents {
   'friend:rejected': (data: { requestId: number }) => void
   'friend:removed': (data: { characterId: string }) => void
   'friend:teleport-confirmed': (data: { characterId: string; nickname: string; position: { x: number; y: number }; chunkId: string }) => void
+  'friend:chat-message': (data: { messageId: number; fromCharacterId: string; fromNickname: string; content: string; createdAt: string }) => void
+  'friend:message-sent': (data: { messageId: number; toCharacterId: string; content: string; createdAt: string }) => void
+  'friend:chat-history': (data: { friendCharacterId: string; messages: FriendChatMessageDTO[] }) => void
   // Pigeon mail events (server -> client)
   'pigeon:state': (data: { messages: PigeonMessageDTO[]; unreadCount: number }) => void
   'pigeon:sent': (data: { messageId: number; toCharacterId: string; toNickname: string; delayMs: number; delivered: boolean }) => void
@@ -82,6 +85,8 @@ export interface ClientToServerEvents {
   'friend:reject-request': (data: { requestId: number }) => void
   'friend:remove': (data: { characterId: string }) => void
   'friend:teleport': (data: { characterId: string }) => void
+  'friend:send-message': (data: { toCharacterId: string; content: string }) => void
+  'friend:request-chat-history': (data: { friendCharacterId: string }) => void
   // Pigeon mail events (client -> server)
   'pigeon:request-state': () => void
   'pigeon:send': (data: { toCharacterId: string; content: string }) => void
@@ -228,6 +233,15 @@ class SocketClient {
     })
     this.socket.on('friend:teleport-confirmed', (data: { characterId: string; nickname: string; position: { x: number; y: number }; chunkId: string }) => {
       EventBus.emit('friend:teleport-confirmed', data)
+    })
+    this.socket.on('friend:chat-message', (data: { messageId: number; fromCharacterId: string; fromNickname: string; content: string; createdAt: string }) => {
+      EventBus.emit('friend:chat-message', data)
+    })
+    this.socket.on('friend:message-sent', (data: { messageId: number; toCharacterId: string; content: string; createdAt: string }) => {
+      EventBus.emit('friend:message-sent', data)
+    })
+    this.socket.on('friend:chat-history', (data: { friendCharacterId: string; messages: FriendChatMessageDTO[] }) => {
+      EventBus.emit('friend:chat-history', data)
     })
 
     // Pigeon mail events: forward to EventBus for the pigeon store / UI

@@ -1,7 +1,15 @@
 import { defineStore } from 'pinia'
 import { socketClient } from '../game/network/SocketClient'
 import { EventBus } from '../game/EventBus'
-import type { FriendListItemDTO, FriendRequestDTO } from '../api/types'
+import type { FriendListItemDTO, FriendRequestDTO, FriendChatMessageDTO } from '../api/types'
+
+interface ChatMessage {
+  id: number
+  fromCharacterId: string
+  toCharacterId: string
+  content: string
+  createdAt: string
+}
 
 interface FriendState {
   friends: FriendListItemDTO[]
@@ -10,6 +18,10 @@ interface FriendState {
   error: string | null
   /** 未读好友申请数量（用于信箱角标） */
   unreadRequestCount: number
+  /** 私聊消息缓存，按好友 characterId 分组 */
+  chatMessages: Record<string, ChatMessage[]>
+  /** 当前打开的私聊窗口对应的好友 characterId（null = 未打开） */
+  activeChatFriendId: string | null
 }
 
 export const useFriendStore = defineStore('friend', {
@@ -19,6 +31,8 @@ export const useFriendStore = defineStore('friend', {
     loading: false,
     error: null,
     unreadRequestCount: 0,
+    chatMessages: {},
+    activeChatFriendId: null,
   }),
 
   getters: {
@@ -63,6 +77,63 @@ export const useFriendStore = defineStore('friend', {
       socketClient.emit('friend:teleport', { characterId })
     },
 
+    // ---- 私聊（GDD 2.7 私聊频道） ----
+
+    /** 打开与某好友的私聊窗口并拉取历史消息 */
+    openChat(friendCharacterId: string) {
+      this.activeChatFriendId = friendCharacterId
+      if (!socketClient.connected) return
+      socketClient.emit('friend:request-chat-history', { friendCharacterId })
+    },
+
+    /** 关闭私聊窗口 */
+    closeChat() {
+      this.activeChatFriendId = null
+    },
+
+    /** 发送私聊消息（好友在线时即时送达） */
+    sendChatMessage(toCharacterId: string, content: string) {
+      if (!socketClient.connected) return
+      socketClient.emit('friend:send-message', { toCharacterId, content })
+    },
+
+    /** 服务端确认消息已存储（回显到本地聊天记录） */
+    onMessageSent(data: { messageId: number; toCharacterId: string; content: string; createdAt: string }) {
+      const list = this.chatMessages[data.toCharacterId] ?? []
+      list.push({
+        id: data.messageId,
+        fromCharacterId: 'self',
+        toCharacterId: data.toCharacterId,
+        content: data.content,
+        createdAt: data.createdAt,
+      })
+      this.chatMessages[data.toCharacterId] = list
+    },
+
+    /** 收到好友发来的私聊消息 */
+    onChatMessage(data: { messageId: number; fromCharacterId: string; fromNickname: string; content: string; createdAt: string }) {
+      const list = this.chatMessages[data.fromCharacterId] ?? []
+      list.push({
+        id: data.messageId,
+        fromCharacterId: data.fromCharacterId,
+        toCharacterId: 'self',
+        content: data.content,
+        createdAt: data.createdAt,
+      })
+      this.chatMessages[data.fromCharacterId] = list
+    },
+
+    /** 服务端下发与某好友的私聊历史（覆盖本地记录） */
+    onChatHistory(data: { friendCharacterId: string; messages: FriendChatMessageDTO[] }) {
+      this.chatMessages[data.friendCharacterId] = data.messages.map((m) => ({
+        id: m.id,
+        fromCharacterId: m.fromCharacterId === data.friendCharacterId ? m.fromCharacterId : 'self',
+        toCharacterId: m.toCharacterId,
+        content: m.content,
+        createdAt: m.createdAt,
+      }))
+    },
+
     // ---- 状态更新（由 EventBus 事件驱动） ----
 
     applyState(data: { friends: FriendListItemDTO[]; requests: FriendRequestDTO[] }) {
@@ -87,7 +158,7 @@ export const useFriendStore = defineStore('friend', {
       this.unreadRequestCount = this.requests.length
     },
 
-    onRequestSent(data: { requestId: number; toCharacterId: string; toNickname: string }) {
+    onRequestSent(_data: { requestId: number; toCharacterId: string; toNickname: string }) {
       // 发送成功，无需本地状态变更（可提示）
     },
 
@@ -137,4 +208,7 @@ export function registerFriendListeners() {
   EventBus.on('friend:accepted', (data) => store.onAccepted(data))
   EventBus.on('friend:rejected', (data) => store.onRejected(data))
   EventBus.on('friend:removed', (data) => store.onRemoved(data))
+  EventBus.on('friend:message-sent', (data) => store.onMessageSent(data))
+  EventBus.on('friend:chat-message', (data) => store.onChatMessage(data))
+  EventBus.on('friend:chat-history', (data) => store.onChatHistory(data))
 }

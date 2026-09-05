@@ -12,16 +12,18 @@ import { useCharacterStore } from '../stores/character'
 import { useInventoryStore } from '../stores/inventory'
 import { useVehicleStore } from '../stores/vehicle'
 import VehicleCraftPanel from '../components/game/HUD/VehicleCraftPanel.vue'
+import ChunkOwnershipPanel from '../components/game/HUD/ChunkOwnershipPanel.vue'
 import { useRoomStore } from '../stores/room'
 import { useInteriorStore } from '../stores/interior'
 import FriendListPanel from '../components/game/HUD/FriendListPanel.vue'
+import PrivateChatPanel from '../components/game/HUD/PrivateChatPanel.vue'
 import MailboxPanel from '../components/game/HUD/MailboxPanel.vue'
 import PigeonMailPanel from '../components/game/HUD/PigeonMailPanel.vue'
 import TeamPanel from '../components/game/HUD/TeamPanel.vue'
 import TownPortalPanel from '../components/game/HUD/TownPortalPanel.vue'
 import PlayerInfoCard from '../components/game/HUD/PlayerInfoCard.vue'
 import { apiGet, apiPost, ApiRequestError } from '../api/http'
-import type { BuildTemplateDTO, OwnedChunkDTO } from '../api/types'
+import type { BuildTemplateDTO } from '../api/types'
 import { registerFriendListeners, useFriendStore } from '../stores/friend'
 import { registerPigeonListeners, usePigeonStore } from '../stores/pigeon'
 import { registerTeamListeners, useTeamStore } from '../stores/team'
@@ -50,13 +52,23 @@ const showMailbox = ref(false)
 const showPigeon = ref(false)
 const showTeam = ref(false)
 const selectedPlayer = ref<{ characterId: string; nickname: string } | null>(null)
+/** 当前私聊窗口的目标好友 */
+const privateChatTarget = ref<{ friendCharacterId: string; friendNickname: string } | null>(null)
+
+function openPrivateChat(payload: { friendCharacterId: string; friendNickname: string }) {
+  privateChatTarget.value = payload
+}
+function closePrivateChat() {
+  friendStore.closeChat()
+  privateChatTarget.value = null
+}
 
 // ---- 背包 / 建造 ----
 const showInventory = ref(false)
 const showVehicle = ref(false)
 const showBuildMenu = ref(false)
+const showOwnership = ref(false)
 const templates = ref<BuildTemplateDTO[]>([])
-const ownedChunks = ref<OwnedChunkDTO[]>([])
 const buildForm = ref({ roomName: '' })
 const buildMessage = ref<{ text: string; type: 'info' | 'warn' | 'error' | 'success' } | null>(null)
 const building = ref(false)
@@ -92,18 +104,6 @@ async function refreshInventory() {
   }
 }
 
-async function refreshOwnedChunks() {
-  try {
-    const data = await apiGet<{ chunks: OwnedChunkDTO[] }>(
-      '/build/my-chunks',
-      userStore.accessToken ?? undefined
-    )
-    ownedChunks.value = data.chunks ?? []
-  } catch (err) {
-    console.warn('fetch owned chunks failed', err)
-  }
-}
-
 async function openBuildMenu() {
   showBuildMenu.value = true
   buildMessage.value = null
@@ -117,7 +117,6 @@ async function openBuildMenu() {
   } catch (err) {
     console.warn('fetch templates failed', err)
   }
-  refreshOwnedChunks()
 }
 
 function onInventoryUpdated(_payload: { items: { itemType: string; quantity: number }[] }) {
@@ -128,7 +127,6 @@ function onInventoryUpdated(_payload: { items: { itemType: string; quantity: num
 
 function onChunkChanged(_payload: { chunkId: string }) {
   buildMessage.value = null
-  if (showBuildMenu.value) refreshOwnedChunks()
 }
 
 async function buildChatRoom(template: string) {
@@ -152,7 +150,6 @@ async function buildChatRoom(template: string) {
     buildMessage.value = { text: `建造成功！聊天室 #${data.chatRoomId}`, type: 'success' }
     EventBus.emit('build:created', { chunkId: currentChunkId.value, chatRoomId: data.chatRoomId })
     refreshInventory()
-    refreshOwnedChunks()
   } catch (err) {
     const text = err instanceof ApiRequestError ? err.message : '建造失败，请稍后再试'
     buildMessage.value = { text, type: 'error' }
@@ -270,6 +267,7 @@ onMounted(() => {
   EventBus.on('ui:enter-room', onEnterRoom)
   EventBus.on('ui:exit-room-interior', onExitRoomInterior)
   EventBus.on('ui:show-player-info', onShowPlayerInfo)
+  EventBus.on('ui:open-private-chat', openPrivateChat)
   EventBus.on('friend:request-received', onFriendRequestReceived)
   EventBus.on('friend:teleport-confirmed', onFriendTeleportConfirmed)
   EventBus.on('pigeon:delivered', onPigeonDelivered)
@@ -308,6 +306,7 @@ onBeforeUnmount(() => {
   EventBus.off('ui:enter-room', onEnterRoom)
   EventBus.off('ui:exit-room-interior', onExitRoomInterior)
   EventBus.off('ui:show-player-info', onShowPlayerInfo)
+  EventBus.off('ui:open-private-chat', openPrivateChat)
   EventBus.off('friend:request-received', onFriendRequestReceived)
   EventBus.off('friend:teleport-confirmed', onFriendTeleportConfirmed)
   EventBus.off('pigeon:delivered', onPigeonDelivered)
@@ -353,6 +352,7 @@ onBeforeUnmount(() => {
         </button>
         <button class="action-btn" @click="showVehicle = !showVehicle">🐎 交通工具</button>
         <button class="action-btn" @click="openBuildMenu">🏠 建造</button>
+        <button class="action-btn" @click="showOwnership = !showOwnership">🗺️ 我的领地</button>
         <button class="action-btn" @click="showFriends = !showFriends">
           👥 好友 ({{ friendStore.friends.length }})
         </button>
@@ -443,20 +443,19 @@ onBeforeUnmount(() => {
         <p v-if="buildMessage" class="build-msg" :class="`msg-${buildMessage.type}`">
           {{ buildMessage.text }}
         </p>
-        <div v-if="ownedChunks.length" class="owned-chunks">
-          <h4>我的领地</h4>
-          <ul>
-            <li v-for="chunk in ownedChunks" :key="chunk.chunkId">
-              {{ chunk.chunkId }}
-              <span v-if="chunk.roomName">· {{ chunk.roomName }}</span>
-              <span class="visibility">{{ chunk.isPublic ? '公开' : '私有' }}</span>
-            </li>
-          </ul>
-        </div>
       </div>
 
       <div v-if="showFriends" class="panel">
         <FriendListPanel />
+      </div>
+
+      <div v-if="privateChatTarget" class="panel private-chat-panel">
+        <PrivateChatPanel
+          :key="privateChatTarget.friendCharacterId"
+          :friend-character-id="privateChatTarget.friendCharacterId"
+          :friend-nickname="privateChatTarget.friendNickname"
+          @close="closePrivateChat"
+        />
       </div>
 
       <div v-if="showMailbox" class="panel">
@@ -472,6 +471,9 @@ onBeforeUnmount(() => {
       </div>
       <div v-if="showTownPortal" class="panel">
         <TownPortalPanel />
+      </div>
+      <div v-if="showOwnership" class="panel">
+        <ChunkOwnershipPanel />
       </div>
     </div>
 
@@ -495,6 +497,10 @@ onBeforeUnmount(() => {
             <button class="mobile-action-btn" @click="openBuildMenu(); showMobileMenu = false">
               <span class="mobile-btn-icon">🏠</span>
               <span class="mobile-btn-label">建造</span>
+            </button>
+            <button class="mobile-action-btn" @click="showOwnership = !showOwnership; showMobileMenu = false">
+              <span class="mobile-btn-icon">🗺️</span>
+              <span class="mobile-btn-label">领地</span>
             </button>
             <button class="mobile-action-btn" @click="showFriends = !showFriends; showMobileMenu = false">
               <span class="mobile-btn-icon">👥</span>
@@ -602,16 +608,20 @@ onBeforeUnmount(() => {
             <p v-if="buildMessage" class="build-msg" :class="`msg-${buildMessage.type}`">
               {{ buildMessage.text }}
             </p>
-            <div v-if="ownedChunks.length" class="owned-chunks">
-              <h4>我的领地</h4>
-              <ul>
-                <li v-for="chunk in ownedChunks" :key="chunk.chunkId">
-                  {{ chunk.chunkId }}
-                  <span v-if="chunk.roomName">· {{ chunk.roomName }}</span>
-                  <span class="visibility">{{ chunk.isPublic ? '公开' : '私有' }}</span>
-                </li>
-              </ul>
-            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <Transition name="slide-up">
+      <div v-if="isMobile && showOwnership" class="mobile-panel-overlay">
+        <div class="mobile-panel">
+          <div class="mobile-panel-header">
+            <h3>我的领地</h3>
+            <button class="close-panel-btn" @click="showOwnership = false">✕</button>
+          </div>
+          <div class="mobile-panel-content">
+            <ChunkOwnershipPanel />
           </div>
         </div>
       </div>
@@ -626,6 +636,25 @@ onBeforeUnmount(() => {
           </div>
           <div class="mobile-panel-content">
             <FriendListPanel />
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <Transition name="slide-up">
+      <div v-if="isMobile && privateChatTarget" class="mobile-panel-overlay">
+        <div class="mobile-panel">
+          <div class="mobile-panel-header">
+            <h3>私聊 — {{ privateChatTarget.friendNickname }}</h3>
+            <button class="close-panel-btn" @click="closePrivateChat">✕</button>
+          </div>
+          <div class="mobile-panel-content">
+            <PrivateChatPanel
+              :key="privateChatTarget.friendCharacterId"
+              :friend-character-id="privateChatTarget.friendCharacterId"
+              :friend-nickname="privateChatTarget.friendNickname"
+              @close="closePrivateChat"
+            />
           </div>
         </div>
       </div>
@@ -798,6 +827,11 @@ onBeforeUnmount(() => {
   border: 1px solid #2e3a44;
   border-radius: 8px;
   padding: 10px;
+}
+.private-chat-panel {
+  display: flex;
+  flex-direction: column;
+  height: 360px;
 }
 .chat-panel-wrap {
   display: flex;

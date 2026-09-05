@@ -341,6 +341,102 @@ export class FriendService {
     );
     return rows.map((row: any) => String(row.friend_id));
   }
+
+  /**
+   * Verify two characters are friends (GDD 2.7 私聊频道 authorization).
+   */
+  async isFriend(characterId: string, otherCharacterId: string): Promise<boolean> {
+    const id1 = Math.min(parseInt(characterId), parseInt(otherCharacterId));
+    const id2 = Math.max(parseInt(characterId), parseInt(otherCharacterId));
+    const rows: any = await query(
+      'SELECT id FROM friendships WHERE character_id_1 = ? AND character_id_2 = ?',
+      [id1, id2]
+    );
+    return rows.length > 0;
+  }
+
+  /**
+   * Save a private chat message between friends (short-term history cache, GDD 2.7).
+   * Returns the inserted message row.
+   */
+  async saveChatMessage(
+    fromCharacterId: string,
+    toCharacterId: string,
+    content: string
+  ): Promise<{ id: number; fromCharacterId: string; toCharacterId: string; content: string; createdAt: string }> {
+    const result: any = await query(
+      'INSERT INTO friend_messages (from_character_id, to_character_id, content) VALUES (?, ?, ?)',
+      [fromCharacterId, toCharacterId, content]
+    );
+    const rows: any = await query(
+      'SELECT id, from_character_id, to_character_id, content, created_at FROM friend_messages WHERE id = ?',
+      [result.insertId]
+    );
+    const row = rows[0];
+    return {
+      id: row.id,
+      fromCharacterId: String(row.from_character_id),
+      toCharacterId: String(row.to_character_id),
+      content: row.content,
+      createdAt: new Date(row.created_at).toISOString(),
+    };
+  }
+
+  /**
+   * Get recent chat messages between two characters (both directions), newest last.
+   * Kept short-term only: trims the cache so each pair keeps at most the
+   * most recent 100 messages (GDD 2.7 消息历史记录).
+   */
+  async getRecentChatMessages(
+    characterId: string,
+    otherCharacterId: string,
+    limit = 50
+  ): Promise<Array<{ id: number; fromCharacterId: string; toCharacterId: string; content: string; createdAt: string }>> {
+    const rows: any = await query(
+      `SELECT id, from_character_id, to_character_id, content, created_at
+       FROM friend_messages
+       WHERE (from_character_id = ? AND to_character_id = ?)
+          OR (from_character_id = ? AND to_character_id = ?)
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+      [characterId, otherCharacterId, otherCharacterId, characterId, limit]
+    );
+    return rows
+      .map((row: any) => ({
+        id: row.id,
+        fromCharacterId: String(row.from_character_id),
+        toCharacterId: String(row.to_character_id),
+        content: row.content,
+        createdAt: new Date(row.created_at).toISOString(),
+      }))
+      .reverse();
+  }
+
+  /**
+   * Trim the short-term cache for a pair: delete messages beyond the most
+   * recent 100 (GDD 2.7 服务器短期缓存最近 100 条).
+   */
+  async trimChatCache(characterId: string, otherCharacterId: string): Promise<void> {
+    // Delete messages for this pair that are NOT in the most-recent 100.
+    // Parentheses are critical: (pair-conditions) AND id NOT IN (subquery).
+    const pairCondition = `((from_character_id = ? AND to_character_id = ?) OR (from_character_id = ? AND to_character_id = ?))`;
+    const subqueryCondition = `((from_character_id = ? AND to_character_id = ?) OR (from_character_id = ? AND to_character_id = ?))`;
+    await query(
+      `DELETE FROM friend_messages
+       WHERE ${pairCondition}
+         AND id NOT IN (
+           SELECT keep_id FROM (
+             SELECT id AS keep_id
+             FROM friend_messages
+             WHERE ${subqueryCondition}
+             ORDER BY created_at DESC, id DESC
+             LIMIT 100
+           ) AS keep
+         )`,
+      [characterId, otherCharacterId, otherCharacterId, characterId,
+       characterId, otherCharacterId, otherCharacterId, characterId]
+    );
+  }
 }
 
 export default new FriendService();

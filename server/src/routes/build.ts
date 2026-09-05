@@ -121,4 +121,40 @@ router.post('/visibility', async (req: Request, res: Response, next: NextFunctio
   }
 });
 
+// Abandon a chunk: demolish chat room, refund 60% resources, revert to unowned empty land (GDD §2.2)
+router.post('/abandon', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      throw new AppError('User not authenticated', 401);
+    }
+
+    const character = await CharacterService.getCharacterByUserId(userId);
+    if (!character) {
+      throw new AppError('Character not found', 404);
+    }
+
+    const { chunkId } = req.body ?? {};
+    if (!chunkId || !/^-?\d+_-?\d+$/.test(String(chunkId))) {
+      throw new AppError('chunkId is required', 400);
+    }
+
+    const result = await BuildService.abandonChunk(
+      String(character.id),
+      String(chunkId)
+    );
+
+    if (!result.success) {
+      throw new AppError(result.message ?? 'Abandon failed', 400);
+    }
+
+    res.json({
+      status: 'success',
+      data: { chunkId, refunded: result.refunded ?? [] },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;

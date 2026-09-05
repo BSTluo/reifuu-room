@@ -21,6 +21,11 @@ function teleport(friendCharacterId: string, nickname: string) {
   showToast(`正在传送到 ${nickname} 的位置…`, 'info')
 }
 
+function openChat(friendCharacterId: string, nickname: string) {
+  friendStore.openChat(friendCharacterId)
+  EventBus.emit('ui:open-private-chat', { friendCharacterId, friendNickname: nickname })
+}
+
 function removeFriend(friendCharacterId: string, nickname: string) {
   if (!confirm(`确定删除好友 ${nickname} 吗？`)) return
   friendStore.removeFriend(friendCharacterId)
@@ -73,6 +78,14 @@ onBeforeUnmount(() => {
           <span class="friend-location">{{ friend.chunkId }}</span>
         </div>
         <div class="friend-actions">
+          <button
+            class="btn-chat"
+            :disabled="!friend.isOnline"
+            :title="friend.isOnline ? '发送私聊消息' : '好友不在线（可使用飞鸽传信）'"
+            @click="openChat(friend.characterId, friend.nickname)"
+          >
+            💬
+          </button>
           <button
             class="btn-teleport"
             :disabled="!friend.isOnline"
@@ -154,6 +167,19 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 4px;
   flex-shrink: 0;
+}
+.btn-chat {
+  padding: 3px 6px;
+  font-size: 12px;
+  border: 1px solid #4dd0e1;
+  background: rgba(77, 208, 225, 0.15);
+  color: #4dd0e1;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.btn-chat:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 .btn-teleport {
   padding: 3px 8px;

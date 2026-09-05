@@ -1,5 +1,5 @@
 import mitt from 'mitt'
-import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO, FurnitureItemDTO } from '../api/types'
+import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO, FurnitureItemDTO, FriendChatMessageDTO } from '../api/types'
 export interface TownDTO {
   id: number; name: string; chunkId: string; continent: string; level: number
   portalId: number; portalX: number; portalY: number; cooldownSeconds: number; cooldownRemaining?: number; unlocked: boolean
@@ -58,6 +58,7 @@ export type GameEvents = {
   'vehicle:equipped': { id: number; vehicleType: 'horse' | 'cart'; speedMultiplier: number } | null
   /** 建造完成 → 场景可显示聊天室标记 */
   'build:created': { chunkId: string; chatRoomId: number }
+  'build:abandoned': { chunkId: string }
 
   // Chat room
   /** 服务端下发房间历史消息 */
@@ -118,8 +119,16 @@ export type GameEvents = {
   'friend:removed': { characterId: string }
   /** 传送到好友位置成功 */
   'friend:teleport-confirmed': { characterId: string; nickname: string; position: { x: number; y: number }; chunkId: string }
+  /** 收到好友私聊消息（在线即时送达） */
+  'friend:chat-message': { messageId: number; fromCharacterId: string; fromNickname: string; content: string; createdAt: string }
+  /** 私聊消息发送成功（服务端确认） */
+  'friend:message-sent': { messageId: number; toCharacterId: string; content: string; createdAt: string }
+  /** 服务端下发与某好友的私聊历史 */
+  'friend:chat-history': { friendCharacterId: string; messages: FriendChatMessageDTO[] }
   /** UI 请求打开好友面板 */
   'ui:open-friends': void
+  /** UI 请求打开私聊窗口 */
+  'ui:open-private-chat': { friendCharacterId: string; friendNickname: string }
   /** UI 请求打开信箱面板 */
   'ui:open-mailbox': void
   /** 点击其他玩家 → 显示信息卡（含加好友按钮） */

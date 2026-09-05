@@ -118,16 +118,12 @@ function formatTime(iso: string): string {
   return `${hh}:${mm}`
 }
 
-function roleLabel(role: string): string {
-  return role === 'leader' ? '队长' : '成员'
-}
-
 // ---- 事件监听 ----
 function onError(payload: { message: string }) {
   showToast(payload.message, 'error')
 }
 function onInviteReceived(payload: { teamName: string; fromNickname: string }) {
-  showToast(`${fromNickname} 邀请你加入「${payload.teamName}」`, 'success')
+  showToast(`${payload.fromNickname} 邀请你加入「${payload.teamName}」`, 'success')
 }
 function onApplicationReceived(payload: { nickname: string }) {
   showToast(`${payload.nickname} 申请加入团队`, 'info')

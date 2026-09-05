@@ -353,3 +353,17 @@ CREATE TABLE IF NOT EXISTS team_applications (
     FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
     FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Friend private chat messages (GDD 2.7 私聊频道)
+-- Short-term cache: stores recent messages between friends for history display.
+CREATE TABLE IF NOT EXISTS friend_messages (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    from_character_id INT NOT NULL,
+    to_character_id INT NOT NULL,
+    content VARCHAR(200) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_pair_from (from_character_id, to_character_id, created_at),
+    INDEX idx_pair_to (to_character_id, from_character_id, created_at),
+    FOREIGN KEY (from_character_id) REFERENCES characters(id) ON DELETE CASCADE,
+    FOREIGN KEY (to_character_id) REFERENCES characters(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

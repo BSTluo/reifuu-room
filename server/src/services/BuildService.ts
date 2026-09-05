@@ -3,6 +3,10 @@ import logger from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
 import InventoryService from './InventoryService.js';
 import TeamService from './TeamService.js';
+import SpawnPointService from './SpawnPointService.js';
+
+/** Resource refund ratio when abandoning a chunk (GDD §2.2: 50-80%) */
+const ABANDON_REFUND_RATIO = 0.6;
 
 interface BuildTemplate {
   template: 'wooden_house' | 'stone_house' | 'advanced_house';
@@ -212,6 +216,87 @@ export class BuildService {
       }
       logger.error('Set chunk public error', error);
       return { success: false, message: 'Update failed' };
+    }
+  }
+
+  /**
+   * Abandon a chunk: demolish the chat room, refund 60% of build resources,
+   * revert chunk to unowned empty land, and invalidate spawn point pools.
+   * (GDD §2.2: 放弃地块)
+   */
+  async abandonChunk(
+    characterId: string,
+    chunkId: string
+  ): Promise<{ success: boolean; message?: string; refunded?: { itemType: string; quantity: number }[] }> {
+    try {
+      // Validate chunkId format
+      if (!/^-?\d+_-?\d+$/.test(chunkId)) {
+        throw new AppError('Invalid chunkId format', 400);
+      }
+
+      // Verify ownership
+      const chunks: any = await query(
+        'SELECT owner_id, chunk_type FROM map_chunks WHERE chunk_id = ?',
+        [chunkId]
+      );
+
+      if (chunks.length === 0) {
+        throw new AppError('Chunk not found', 404);
+      }
+
+      if (chunks[0].owner_id?.toString() !== characterId) {
+        throw new AppError('Not the owner of this chunk', 403);
+      }
+
+      if (chunks[0].chunk_type !== 'chatroom') {
+        throw new AppError('Can only abandon chunks with a chat room', 400);
+      }
+
+      // Look up the chat room template to calculate resource refund
+      const rooms: any = await query(
+        'SELECT id, template FROM chat_rooms WHERE chunk_id = ?',
+        [chunkId]
+      );
+
+      if (rooms.length === 0) {
+        throw new AppError('Chat room not found for this chunk', 404);
+      }
+
+      const roomId = rooms[0].id;
+      const template = BUILD_TEMPLATES[rooms[0].template];
+
+      // Demolish chat room: delete room_members (FK CASCADE handles this),
+      // delete the chat_room row, and revert chunk to unowned empty land.
+      await query('DELETE FROM chat_rooms WHERE id = ?', [roomId]);
+
+      await query(
+        `UPDATE map_chunks SET chunk_type = 'empty', owner_id = NULL, is_public = FALSE, team_id = NULL
+         WHERE chunk_id = ?`,
+        [chunkId]
+      );
+
+      // Refund 60% of build resources (rounded down, minimum 1)
+      const refunded: { itemType: string; quantity: number }[] = [];
+      if (template) {
+        for (const req of template.requirements) {
+          const refundQty = Math.max(1, Math.floor(req.quantity * ABANDON_REFUND_RATIO));
+          await InventoryService.addItem(characterId, req.itemType, refundQty);
+          refunded.push({ itemType: req.itemType, quantity: refundQty });
+        }
+      }
+
+      // Invalidate spawn point pools since chunk ownership changed
+      await SpawnPointService.invalidatePools();
+
+      logger.info(`Character ${characterId} abandoned chunk ${chunkId}, refunded ${JSON.stringify(refunded)}`);
+
+      return { success: true, refunded };
+    } catch (error: any) {
+      if (error instanceof AppError) {
+        return { success: false, message: error.message };
+      }
+      logger.error('Abandon chunk error', error);
+      return { success: false, message: 'Abandon failed' };
     }
   }
 

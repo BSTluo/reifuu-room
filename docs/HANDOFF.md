@@ -98,6 +98,10 @@ npm run dev        # Vite，端口 5173
   - `GET /map/rooms-in-chunk/:chunkId`（在 `routes/map.ts`）：查区块内聊天室。
 - 前端：`GameView` 建造面板（选模板 + 命名 + 材料核对 + 我的领地列表）。
 
+**地块管理扩展（Phase 2 收尾，✅ 已完成）**
+- `POST /build/abandon`：放弃地块（`{ chunkId }`），按 60% 返还建造材料（`ABANDON_REFUND_RATIO = 0.6`，GDD §2.2 建议 50-80%），区块重置为 `empty`，`chat_rooms` 因 FK CASCADE 自动清理。
+- 前端：`ChunkOwnershipPanel.vue`（HUD）——领地列表 + 公开/私有切换 + 放弃确认（显示返还材料明细），`WorldScene` 监听 `build:abandoned` 刷新区块渲染。
+
 ### 4.5 视野迷雾系统（Phase 2，✅ 已全部完成）
 见 §5。
 
@@ -274,6 +278,34 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 ### 6.7.6 修复记录（E2E 验证时发现）
 1. **accept 时 `Duplicate entry '5-6-accepted' for key 'idx_pair_pending'`**：原 schema 把 `UNIQUE KEY idx_pair_pending (from_character_id, to_character_id, status)` 全状态唯一化——同一对好友一旦有历史 accepted/rejected 行，新请求 accept 的 UPDATE 撞唯一键，`friend:accepted` 永远不发出（且 REST 路径同样会 500）。修复：改回**普通索引**，pending 查重由 `FriendService.sendRequest` 显式双向查询完成。⚠️ MySQL 5.7 下不要尝试用生成列实现"仅 pending 唯一"（生成列 ALTER 与表上外键冲突，errno 150）。
 2. **服务端错误事件名**：socket 错误统一是 `error`（不是 `socket:error`）；E2E 脚本若漏监听 `error` 会误以为 handler 静默失败。
+
+### 6.7.7 好友私聊频道（GDD 2.7 私聊频道，✅ 已完成）
+
+**任务状态**：已完成。好友间即时私聊（在线零延迟）+ 消息历史缓存（最近 100 条/对）。
+
+**数据库**：
+- `friend_messages (id, from_character_id, to_character_id, content VARCHAR(200), created_at)`：短期缓存私聊消息。索引 `idx_pair_from` / `idx_pair_to` 覆盖双向查询。外键 CASCADE 删除。
+
+**后端**：
+- `FriendService.ts` 新增方法：
+  - `isFriend(characterId, otherCharacterId)`：验证好友关系（私聊授权）。
+  - `saveChatMessage(from, to, content)`：存储消息并返回完整行。
+  - `getRecentChatMessages(characterId, otherCharacterId, limit=50)`：获取双向最近消息（正序返回）。
+  - `trimChatCache(characterId, otherCharacterId)`：保留每对好友最近 100 条，删除更早消息。
+- socket 事件（`server/src/socket.ts`）：
+  - C→S：`friend:send-message {toCharacterId, content}` / `friend:request-chat-history {friendCharacterId}`。
+  - S→C：`friend:message-sent {messageId, toCharacterId, content, createdAt}`（发送确认）/ `friend:chat-message {messageId, fromCharacterId, fromNickname, content, createdAt}`（在线即时送达）/ `friend:chat-history {friendCharacterId, messages[]}`。
+  - 发送流程：验证好友关系 → 存储消息 → 确认给发送方 → 若好友在线则即时推送给接收方 → 异步 trim 缓存。
+
+**前端**：
+- 类型：`api/types.ts` 增 `FriendChatMessageDTO`。
+- `stores/friend.ts` 新增：`chatMessages` 状态（按好友 ID 分组）、`activeChatFriendId`、动作 `openChat` / `closeChat` / `sendChatMessage` / `onMessageSent` / `onChatMessage` / `onChatHistory`；`registerFriendListeners` 注册 `friend:message-sent` / `friend:chat-message` / `friend:chat-history` 监听。历史消息归一化：自己发送的消息 `fromCharacterId` 标记为 `'self'`。
+- `EventBus.ts` 新增：`friend:chat-message` / `friend:message-sent` / `friend:chat-history` / `ui:open-private-chat` 事件类型。
+- `SocketClient.ts` 新增对应类型声明和 EventBus 转发。
+- UI 组件：
+  - `PrivateChatPanel.vue`（新）：消息列表 + 输入框（Enter 发送，200 字限制），打开时自动拉取历史，新消息自动滚到底部。
+  - `FriendListPanel.vue`：每个好友增加 💬 私聊按钮（在线可点击，离线禁用并提示可使用飞鸽传信）。
+- `GameView.vue`：桌面侧栏面板 + 移动端弹窗；通过 `ui:open-private-chat` EventBus 事件从 FriendListPanel 打开。
 
 ---
 
@@ -456,7 +488,7 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 - **初始视野范围口径已统一**：GDD 2.6 写 5x5，服务端已用 `exploreArea(..., 2)` = 5x5。若策划后续改口径，改 `server/src/socket.ts` 的半径。
 - ~~前端迷雾完全未做~~（**已解决**，§5.2 完成）。
 - 小地图、资源节点/建造/聊天室前端交互 UI（**已补齐**：`WorldScene` 资源节点渲染 + `GameView` 背包/建造面板）。
-- ~~好友系统~~（**已完成** §6.7）；高级交通工具系统仍未实现（GDD Phase 4.5）。
+- ~~好友系统~~（**已完成** §6.7）；高级交通工具系统仍未实现（GDD Phase 4.5：船只/飞行器跨洲、海洋区块类型、载客逻辑）。
 - 聊天室公开房间仍支持访客访问；私有房间使用 §6.2 的邀请制成员权限。
 - ~~飞鸽传信~~（**已完成** §6.8）：仅建表 → 现 service/routes/socket/UI 均已实现并验证通过。
 - 数据库 `192.168.12.1` 是内网地址，换环境/远程时需改 `.env`（曾有短暂不可达导致 500）。

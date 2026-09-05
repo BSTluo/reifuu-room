@@ -152,7 +152,7 @@ onBeforeUnmount(() => {
           </div>
         </li>
       </ul>
-      <p v-else-if="activeTab === 'inbox'" class="empty">收件箱空空如也</p>
+      <p v-if="activeTab === 'inbox' && !inboxMessages.length" class="empty">收件箱空空如也</p>
 
       <ul v-if="activeTab === 'sent'" class="msg-list">
         <li v-for="msg in sentMessages" :key="msg.id" class="msg-item">
@@ -166,7 +166,7 @@ onBeforeUnmount(() => {
           </div>
         </li>
       </ul>
-      <p v-else-if="activeTab === 'sent'" class="empty">还没有发送过信件</p>
+      <p v-if="activeTab === 'sent' && !sentMessages.length" class="empty">还没有发送过信件</p>
     </div>
 
     <div class="send-form">

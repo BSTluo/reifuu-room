@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { EventBus } from '../../../game/EventBus'
+import { computed, onMounted, ref, watch } from 'vue'
 import { usePluginStore } from '../../../stores/plugin'
 import { useCharacterStore } from '../../../stores/character'
 

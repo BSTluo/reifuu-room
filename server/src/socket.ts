@@ -799,6 +799,93 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       }
     });
 
+    // ---- Friend private chat (好友私聊, GDD 2.7) ----
+    // Send a private message to a friend. Online recipients get it instantly
+    // via socket; the message is also cached server-side for history display.
+    socket.on(
+      'friend:send-message',
+      async (data: { toCharacterId: string; content: string }) => {
+        if (!character) {
+          socket.emit('error', { message: 'No character found' });
+          return;
+        }
+        const toCharacterId = String(data?.toCharacterId ?? '');
+        const content = String(data?.content ?? '').trim().slice(0, 200);
+        if (!toCharacterId || !content) {
+          socket.emit('error', { message: 'Invalid message' });
+          return;
+        }
+        if (toCharacterId === character.id) {
+          socket.emit('error', { message: 'Cannot message yourself' });
+          return;
+        }
+        try {
+          // Authorization: only friends can use the instant private channel.
+          if (!(await FriendService.isFriend(character.id, toCharacterId))) {
+            socket.emit('error', { message: 'Not friends with this character' });
+            return;
+          }
+
+          const saved = await FriendService.saveChatMessage(character.id, toCharacterId, content);
+          // Trim the per-pair short-term cache asynchronously.
+          FriendService.trimChatCache(character.id, toCharacterId).catch((e: unknown) =>
+            logger.warn('Friend chat cache trim failed', e)
+          );
+
+          // Confirm to the sender.
+          socket.emit('friend:message-sent', {
+            messageId: saved.id,
+            toCharacterId,
+            content: saved.content,
+            createdAt: saved.createdAt,
+          });
+
+          // Instant delivery if the friend is online (same-chunk and
+          // cross-chunk online friends both get zero-delay delivery, GDD 2.7).
+          const targetSocket = getSocketForCharacter(io, toCharacterId);
+          if (targetSocket) {
+            targetSocket.emit('friend:chat-message', {
+              messageId: saved.id,
+              fromCharacterId: character.id,
+              fromNickname: character.nickname,
+              content: saved.content,
+              createdAt: saved.createdAt,
+            });
+          }
+        } catch (error: any) {
+          logger.error('Friend chat send error', error);
+          socket.emit('error', { message: error.message || 'Failed to send message' });
+        }
+      }
+    );
+
+    // Request the recent chat history with a specific friend (both directions).
+    socket.on(
+      'friend:request-chat-history',
+      async (data: { friendCharacterId: string }) => {
+        if (!character) {
+          socket.emit('error', { message: 'No character found' });
+          return;
+        }
+        const friendCharacterId = String(data?.friendCharacterId ?? '');
+        if (!friendCharacterId) {
+          socket.emit('error', { message: 'Invalid request' });
+          return;
+        }
+        try {
+          if (!(await FriendService.isFriend(character.id, friendCharacterId))) {
+            socket.emit('error', { message: 'Not friends with this character' });
+            return;
+          }
+          const messages = await FriendService.getRecentChatMessages(character.id, friendCharacterId, 50);
+          socket.emit('friend:chat-history', { friendCharacterId, messages });
+        } catch (error: any) {
+          logger.error('Friend chat history error', error);
+          socket.emit('error', { message: error.message || 'Failed to load chat history' });
+        }
+      }
+    );
+
     // ---- Pigeon mail (飞鸽传信, GDD 2.7) ----
     // Client asks for its current pigeon mail state (inbox + unread count).
     // Sent by the pigeon panel when it opens.
