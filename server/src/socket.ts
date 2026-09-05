@@ -15,6 +15,7 @@ import FriendService from './services/FriendService.js';
 import PigeonMailService from './services/PigeonMailService.js';
 import TeamService from './services/TeamService.js';
 import TownService from './services/TownService.js';
+import PassengerService from './services/PassengerService.js';
 import { calculateChunkLimit } from './services/TeamService.js';
 import { query } from './db/mysql.js';
 import RoomMembershipService from './services/RoomMembershipService.js';
@@ -295,6 +296,42 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
           chunkId: result.chunkId,
           equippedVehicle: result.equippedVehicle,
         });
+
+        // Sync passengers (follow mode) — notify passengers and chunk rooms
+        if (result.passengerUpdates && result.passengerUpdates.length > 0) {
+          for (const pu of result.passengerUpdates) {
+            // Notify the passenger client of their forced position update
+            const passengerSocket = getSocketForCharacter(io, String(pu.passengerCharacterId));
+            if (passengerSocket) {
+              passengerSocket.emit('passenger:position-sync', {
+                position: pu.position,
+                chunkId: pu.chunkId,
+              });
+            }
+            // Broadcast passenger position to their chunk room
+            const passengerSockIds = characterSocketMap.get(String(pu.passengerCharacterId));
+            if (passengerSockIds) {
+              for (const sid of passengerSockIds) {
+                const ps = io.sockets.sockets.get(sid);
+                if (ps) {
+                  if (result.chunkChanged && result.oldChunkId) {
+                    ps.leave(result.oldChunkId);
+                    ps.join(result.chunkId);
+                  }
+                  ps.to(result.chunkId).emit('players:position-update', {
+                    characterId: String(pu.passengerCharacterId),
+                    position: pu.position,
+                  });
+                  ps.emit('player:move-confirmed', {
+                    position: pu.position,
+                    chunkId: pu.chunkId,
+                    equippedVehicle: null,
+                  });
+                }
+              }
+            }
+          }
+        }
       } catch (error: any) {
         logger.error('Player move error', error);
         socket.emit('error', { message: error.message || 'Movement failed' });
@@ -305,6 +342,101 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
     socket.on('echo', (data) => {
       logger.debug(`Echo received from ${socket.id}:`, data);
       socket.emit('echo', data);
+    });
+
+    // ===== Passenger system (GDD §2.8 载客能力) =====
+
+    // 驾驶员邀请玩家乘坐
+    socket.on('vehicle:invite-passenger', async (data: { passengerCharacterId: number }) => {
+      if (!character) { socket.emit('error', { message: 'No character found' }); return; }
+      try {
+        const invite = await PassengerService.invitePassenger(character.id, data.passengerCharacterId);
+        // 通知驾驶员成功
+        socket.emit('passenger:invite-sent', { invite });
+        // 通知被邀请的玩家
+        const passengerSocket = getSocketForCharacter(io, String(data.passengerCharacterId));
+        if (passengerSocket) {
+          passengerSocket.emit('passenger:invited', { invite });
+        }
+      } catch (e: any) {
+        socket.emit('error', { message: e.message || 'Failed to invite passenger' });
+      }
+    });
+
+    // 乘客接受邀请
+    socket.on('vehicle:accept-board', async (data: { inviteId: number }) => {
+      if (!character) { socket.emit('error', { message: 'No character found' }); return; }
+      try {
+        const ride = await PassengerService.acceptInvite(character.id, data.inviteId);
+        socket.emit('passenger:boarded', { ride });
+        // 通知驾驶员
+        const driverSocket = getSocketForCharacter(io, String(ride.driverCharacterId));
+        if (driverSocket) {
+          driverSocket.emit('passenger:boarded', { ride });
+        }
+      } catch (e: any) {
+        socket.emit('error', { message: e.message || 'Failed to board' });
+      }
+    });
+
+    // 乘客拒绝邀请
+    socket.on('vehicle:reject-board', async (data: { inviteId: number }) => {
+      if (!character) { socket.emit('error', { message: 'No character found' }); return; }
+      try {
+        await PassengerService.rejectInvite(character.id, data.inviteId);
+        socket.emit('passenger:rejected', { inviteId: data.inviteId });
+      } catch (e: any) {
+        socket.emit('error', { message: e.message || 'Failed to reject' });
+      }
+    });
+
+    // 乘客下车
+    socket.on('vehicle:exit', async () => {
+      if (!character) { socket.emit('error', { message: 'No character found' }); return; }
+      try {
+        const ride = await PassengerService.getMyRide(character.id);
+        await PassengerService.exitVehicle(character.id);
+        socket.emit('passenger:exited', {});
+        // 通知驾驶员
+        if (ride) {
+          const driverSocket = getSocketForCharacter(io, String(ride.driverCharacterId));
+          if (driverSocket) {
+            driverSocket.emit('passenger:left', { passengerCharacterId: Number(character.id) });
+          }
+        }
+      } catch (e: any) {
+        socket.emit('error', { message: e.message || 'Failed to exit vehicle' });
+      }
+    });
+
+    // 驾驶员踢出乘客
+    socket.on('vehicle:kick-passenger', async (data: { inviteId: number }) => {
+      if (!character) { socket.emit('error', { message: 'No character found' }); return; }
+      try {
+        // 获取乘客 ID 用于通知
+        const passengers = await PassengerService.getDriverPassengers(character.id);
+        const target = passengers.find(p => p.id === data.inviteId);
+        await PassengerService.kickPassenger(character.id, data.inviteId);
+        socket.emit('passenger:kicked', { inviteId: data.inviteId });
+        // 通知被踢的乘客
+        if (target) {
+          const passengerSocket = getSocketForCharacter(io, String(target.passengerCharacterId));
+          if (passengerSocket) {
+            passengerSocket.emit('passenger:forced-exit', { reason: 'kicked' });
+          }
+        }
+      } catch (e: any) {
+        socket.emit('error', { message: e.message || 'Failed to kick passenger' });
+      }
+    });
+
+    // 查询当前乘客邀请列表
+    socket.on('vehicle:pending-invites', async () => {
+      if (!character) return;
+      try {
+        const invites = await PassengerService.getPendingInvites(character.id);
+        socket.emit('passenger:pending-invites', { invites });
+      } catch { /* silent */ }
     });
 
     // Collect a resource node in real-time and broadcast the depletion/refresh

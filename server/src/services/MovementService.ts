@@ -3,6 +3,7 @@ import redisClient, { prefixKey } from '../db/redis.js';
 import logger from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
 import VehicleService from './VehicleService.js';
+import PassengerService from './PassengerService.js';
 
 interface Position {
   x: number;
@@ -62,12 +63,12 @@ export class MovementService {
   }
 
   async getMaxMoveDistance(characterId: string, chunkId?: string): Promise<number> {
-    if (chunkId) return this.MAX_MOVE_DISTANCE * (await this.getTerrainSpeedMultiplier(characterId, chunkId));
+    if (chunkId) return this.MAX_MOVE_DISTANCE * (await this.getTerrainSpeedMultiplier(characterId, chunkId)) * (await PassengerService.getPassengerSpeedPenalty(characterId));
     const rows: any = await query(
       'SELECT speed_multiplier FROM vehicles WHERE character_id = ? AND equipped = TRUE LIMIT 1',
       [characterId]
     );
-    return this.MAX_MOVE_DISTANCE * (rows.length ? Number(rows[0].speed_multiplier) : 1);
+    return this.MAX_MOVE_DISTANCE * (rows.length ? Number(rows[0].speed_multiplier) : 1) * (await PassengerService.getPassengerSpeedPenalty(characterId));
   }
 
   /**
@@ -109,9 +110,15 @@ export class MovementService {
     chunkId: string;
     chunkChanged: boolean;
     oldChunkId?: string;
+    passengerUpdates: { passengerCharacterId: number; nickname: string; position: Position; chunkId: string }[];
     equippedVehicle: { id: number; vehicleType: string; speedMultiplier: number; terrainCapability: string } | null;
   }> {
     try {
+      // 乘客在车上时禁止自主移动（由驾驶员拖行）
+      if (await PassengerService.isOnboard(characterId)) {
+        throw new AppError('你正在乘坐交通工具，移动由驾驶员控制', 403);
+      }
+
       // Get current position from Redis cache
       const cacheKey = prefixKey(`player:${characterId}:position`);
       const cachedData = await redisClient.get(cacheKey);
@@ -186,12 +193,16 @@ export class MovementService {
         logger.error('Failed to update position in database', err);
       });
 
+      // Sync passengers (follow mode) — update their positions to match driver
+      const passengerUpdates = await PassengerService.syncPassengersOnMove(characterId, newPosition, newChunkId);
+
       logger.debug(`Player ${nickname} moved to (${newPosition.x}, ${newPosition.y})`);
 
       return {
         position: newPosition,
         chunkId: newChunkId,
         chunkChanged,
+        passengerUpdates,
         equippedVehicle: await (async () => {
           const rows: any = await query(
             'SELECT id, vehicle_type AS vehicleType, speed_multiplier AS speedMultiplier, terrain_capability AS terrainCapability FROM vehicles WHERE character_id = ? AND equipped = TRUE LIMIT 1',

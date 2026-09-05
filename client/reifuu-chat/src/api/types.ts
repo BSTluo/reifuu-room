@@ -62,7 +62,7 @@ export interface CharacterDTO {
   equippedVehicle?: VehicleDTO | null
 }
 
-export type ResourceType = 'wood' | 'stone' | 'mineral'
+export type ResourceType = 'wood' | 'stone' | 'mineral' | 'coral' | 'deep_mineral'
 
 export interface ResourceNodeDTO {
   id: number
@@ -308,3 +308,21 @@ export interface TeamChatMessageDTO {
   content: string
   timestamp: string
 }
+
+// ---- Passenger system (载客系统) DTOs ----
+
+export interface PassengerInviteDTO {
+  id: number
+  vehicleId: number
+  vehicleType: VehicleType
+  driverCharacterId: number
+  driverNickname: string
+  passengerCharacterId: number
+  passengerNickname: string
+  status: 'pending' | 'onboard' | 'rejected'
+  invitedAt: string
+  boardedAt: string | null
+}
+
+// Alias: a "ride" has the same shape as an invite after boarding
+export type PassengerRideDTO = PassengerInviteDTO

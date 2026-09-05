@@ -3,6 +3,7 @@ import { authenticate } from '../middleware/auth.js';
 import { AppError } from '../middleware/errorHandler.js';
 import CharacterService from '../services/CharacterService.js';
 import VehicleService from '../services/VehicleService.js';
+import PassengerService from '../services/PassengerService.js';
 
 const router = Router();
 router.use(authenticate);
@@ -18,4 +19,9 @@ router.get('/', async (req, res, next) => { try { const id = await character(req
 router.post('/craft', async (req, res, next) => { try { const vehicle = await VehicleService.craft(await character(req), String(req.body?.vehicleType ?? '')); res.status(201).json({ status: 'success', data: { vehicle } }); } catch (e) { next(e); } });
 router.post('/:vehicleId/equip', async (req, res, next) => { try { const vehicleId = Number(req.params.vehicleId); if (!Number.isInteger(vehicleId)) throw new AppError('Invalid vehicle id', 400); res.json({ status: 'success', data: { vehicle: await VehicleService.equip(await character(req), vehicleId) } }); } catch (e) { next(e); } });
 router.post('/unequip', async (req, res, next) => { try { const id = await character(req); await VehicleService.unequip(id); res.json({ status: 'success', data: { vehicle: null } }); } catch (e) { next(e); } });
+
+// Passenger routes (GDD §2.8 载客能力)
+router.get('/passengers', async (req, res, next) => { try { const id = await character(req); res.json({ status: 'success', data: { passengers: await PassengerService.getDriverPassengers(id) } }); } catch (e) { next(e); } });
+router.get('/my-ride', async (req, res, next) => { try { const id = await character(req); res.json({ status: 'success', data: { ride: await PassengerService.getMyRide(id) } }); } catch (e) { next(e); } });
+router.get('/pending-invites', async (req, res, next) => { try { const id = await character(req); res.json({ status: 'success', data: { invites: await PassengerService.getPendingInvites(id) } }); } catch (e) { next(e); } });
 export default router;

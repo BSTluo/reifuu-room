@@ -1,5 +1,5 @@
 import mitt from 'mitt'
-import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO, FurnitureItemDTO, FriendChatMessageDTO } from '../api/types'
+import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO, FurnitureItemDTO, FriendChatMessageDTO, PassengerInviteDTO, PassengerRideDTO } from '../api/types'
 export interface TownDTO {
   id: number; name: string; chunkId: string; continent: string; level: number
   portalId: number; portalX: number; portalY: number; cooldownSeconds: number; cooldownRemaining?: number; unlocked: boolean
@@ -171,6 +171,30 @@ export type GameEvents = {
   'team:chat-message': TeamChatMessageDTO
   /** UI 请求打开团队面板 */
   'ui:open-team': void
+
+  // Passenger system (载客系统) events
+  /** 驾驶员邀请已发送（驾驶员收到确认） */
+  'passenger:invite-sent': { invite: PassengerInviteDTO }
+  /** 收到乘车邀请（被邀请的玩家收到） */
+  'passenger:invited': { invite: PassengerInviteDTO }
+  /** 乘车成功（乘客 + 驾驶员都收到） */
+  'passenger:boarded': { ride: PassengerRideDTO }
+  /** 拒绝邀请成功 */
+  'passenger:rejected': { inviteId: number }
+  /** 下车成功（乘客收到） */
+  'passenger:exited': Record<string, never>
+  /** 乘客下车通知（驾驶员收到） */
+  'passenger:left': { passengerCharacterId: number }
+  /** 踢出乘客成功（驾驶员收到） */
+  'passenger:kicked': { inviteId: number }
+  /** 被驾驶员踢下（乘客收到） */
+  'passenger:forced-exit': { reason: string }
+  /** 待处理邀请列表更新 */
+  'passenger:pending-invites': { invites: PassengerInviteDTO[] }
+  /** 驾驶员移动 → 乘客位置同步 */
+  'passenger:position-sync': { position: { x: number; y: number }; chunkId: string }
+  /** UI 请求打开载客面板 */
+  'ui:open-passenger': void
 }
 
 export const EventBus = mitt<GameEvents>()

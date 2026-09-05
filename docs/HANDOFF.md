@@ -504,7 +504,7 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 3. 逻辑验证：徒步玩家接近海洋区块（|chunkX|<5 或 |chunkY|<5）时客户端阻止移动 + 服务端 403 拒绝；装备船只后可通行海洋且速度 180%；飞艇无视地形全速 200%。
 
 ### 6.14.7 注意事项
-- `magic_crystal`（飞艇制作材料）暂无资源节点产出途径，后续可加资源节点或管理命令发放。
+- ~~`magic_crystal`（飞艇制作材料）暂无资源节点产出途径，后续可加资源节点或管理命令发放。~~ **已解决**：见 §6.17.3，深海矿物采集 20% 概率掉落 magic_crystal。
 - 海洋区块宽度 `OCEAN_CHUNK_WIDTH = 5` 为常量，服务端 `MovementService` 与客户端 `world.ts` 必须保持一致。
 
 ---
@@ -550,6 +550,101 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 - **邀请码即授权**：生成邀请码即视为授权对方出生到自己当前区块，不需要额外手动审批。
 - **事务原子消费**：`markUsedOnConnection` 在 `CharacterService` 的 DB 事务内执行，两人同时用同一码时只有一人成功。
 - **CHUNK_SIZE=32**：区块到世界坐标转换 `worldX = chunkX * 32 + 5`，与服务端 `CharacterService`、客户端 `world.ts` 保持一致。
+
+---
+
+## 6.16 ⭐ 载客系统（GDD §2.8 载客能力，✅ 前后端均已完成）
+
+**任务状态**：已完成。GDD §2.8 规定了载具载客能力（horse=1, cart=2, ship=4, airship=6），本节实现了完整的邀请→上车→跟随→下车/踢出流程。
+
+### 6.16.1 功能概述
+- 驾驶员装备载具后可邀请附近玩家乘坐（通过角色ID）。
+- 被邀请玩家收到乘车邀请通知，可选择接受或拒绝。
+- 上车后乘客移动被锁定（403 错误），位置由驾驶员移动自动同步。
+- 乘客可随时下车，驾驶员可随时踢出乘客。
+- 每多一名乘客，驾驶员速度 -5%（最低 0.5 倍）。
+
+### 6.16.2 数据库
+- **Migration**：`server/src/db/migrations/008-vehicle-passengers.sql`
+  - `CREATE TABLE vehicle_passengers`（`id`, `vehicle_id`, `vehicle_type`, `driver_character_id`, `passenger_character_id`, `status ENUM('pending','boarding','onboard','rejected')`, `invited_at`, `boarded_at`）
+- `schema.sql` 已同步更新。
+
+### 6.16.3 服务端
+- **PassengerService** (`server/src/services/PassengerService.ts`)：
+  - `invitePassenger(driverId, passengerId)` — 创建邀请记录，检查容量上限（capacity - 1）。
+  - `acceptInvite(characterId, inviteId)` — 乘客接受邀请，状态变更为 onboard。
+  - `rejectInvite(characterId, inviteId)` — 拒绝邀请。
+  - `exitVehicle(characterId)` — 乘客主动下车。
+  - `kickPassenger(driverId, inviteId)` — 驾驶员踢出乘客。
+  - `syncPassengersOnMove(driverId, position, chunkId)` — 驾驶员移动时同步乘客 Redis 位置缓存 + DB 位置。
+  - `getPassengerSpeedPenalty(driverId)` — 计算速度惩罚（-5%/乘客，min 0.5×）。
+  - `isOnboard(characterId)` — 检查玩家是否正在乘坐。
+- **MovementService** 集成：
+  - 乘客移动被拦截（403 "你正在乘坐交通工具，移动由驾驶员控制"）。
+  - `getMaxMoveDistance` 应用乘客速度惩罚。
+  - `handlePlayerMove` 返回 `passengerUpdates` 数组，调用 `syncPassengersOnMove`。
+- **Socket** (`server/src/socket.ts`)：
+  - `player:move` handler 中调用 `syncPassengersOnMove`，通过 `passenger:position-sync` 事件通知乘客客户端。
+  - 6 个新 socket 事件：`vehicle:invite-passenger`, `vehicle:accept-board`, `vehicle:reject-board`, `vehicle:exit`, `vehicle:kick-passenger`, `vehicle:pending-invites`。
+- **Routes** (`server/src/routes/vehicle.ts`)：
+  - `GET /vehicle/passengers` — 驾驶员查看当前乘客列表。
+  - `GET /vehicle/my-ride` — 乘客查看当前乘车信息。
+  - `GET /vehicle/pending-invites` — 查看待处理邀请列表。
+
+### 6.16.4 客户端
+- **类型** (`api/types.ts`)：`PassengerInviteDTO`（id/vehicleId/vehicleType/driverCharacterId/driverNickname/passengerCharacterId/passengerNickname/status/invitedAt/boardedAt），`PassengerRideDTO = PassengerInviteDTO`。
+- **EventBus** (`game/EventBus.ts`)：新增 11 个乘客相关事件（`passenger:invite-sent`, `passenger:invited`, `passenger:boarded`, `passenger:rejected`, `passenger:exited`, `passenger:left`, `passenger:kicked`, `passenger:forced-exit`, `passenger:pending-invites`, `passenger:position-sync`, `ui:open-passenger`）。
+- **SocketClient** (`game/network/SocketClient.ts`)：`ServerToClientEvents` + `ClientToServerEvents` 新增乘客事件类型，`setupEventHandlers` 转发所有乘客事件到 EventBus。
+- **Store** (`stores/vehicle.ts`)：新增 `rideInfo`/`pendingInvites`/`driverPassengers`/`showPassengerPanel` state；`fetchMyRide`/`fetchPendingInvites`/`fetchDriverPassengers`/`invitePassenger`/`acceptBoard`/`rejectBoard`/`exitVehicle`/`kickPassenger`/`requestPendingInvites` actions；`listen()` 注册所有乘客 EventBus 事件。
+- **UI** (`components/game/HUD/PassengerPanel.vue`)：载客管理面板，包含：
+  - 乘车信息展示 + 下车按钮（乘客视角）。
+  - 收到的乘车邀请列表 + 接受/拒绝按钮。
+  - 邀请乘客输入框（驾驶员视角）。
+  - 当前乘客列表 + 踢出按钮（驾驶员视角）。
+- **GameView** (`views/GameView.vue`)：🚗 载客按钮 + 面板挂载（桌面端 action-panel + 移动端菜单/overlay）。
+
+### 6.16.5 验证方式
+- 服务端 `tsc --noEmit` ✅
+- 客户端 `npm run build` ✅
+- E2E：player_a 装备 ship → 邀请 player_b → player_b 收到邀请 → 接受 → player_a 移动 → player_b 位置同步 → player_b 下车或 player_a 踢出。
+
+---
+
+## 6.17 ⭐ 海洋区块资源节点（GDD §2.8 海洋内容，✅ 前后端均已完成）
+
+**任务状态**：已完成。GDD §2.8 规定海洋区块应有珊瑚/深海矿物资源节点，本节实现了海洋区块资源生成逻辑。
+
+### 6.17.1 功能概述
+- 海洋区块（`isOceanChunk(chunkX, chunkY)`，即 `|chunkX| < 5 || |chunkY| < 5`）生成珊瑚和深海矿物资源节点。
+- 陆地区块保持原有资源（wood/stone/mineral），不受影响。
+- 珊瑚：2-4 个节点/区块，15 分钟刷新。
+- 深海矿物：0-2 个节点/区块（60% 概率生成），45 分钟刷新。
+- **magic_crystal 来源**：深海矿物采集时有 20% 概率额外掉落 magic_crystal（飞艇制作材料）。
+
+### 6.17.2 数据库
+- **Migration**：`server/src/db/migrations/009-ocean-resources.sql`
+  - `ALTER TABLE resource_nodes MODIFY resource_type ENUM('wood','stone','mineral','coral','deep_mineral')`
+- `schema.sql` 已同步更新。
+
+### 6.17.3 服务端
+- **ResourceService** (`server/src/services/ResourceService.ts`)：
+  - `generateResourcesForChunk` 根据 `isOceanChunk` 分支：海洋 → coral + deep_mineral，陆地 → wood + stone + mineral。
+  - `RESPAWN_TIMES` 改为 `Record<string, number>`，新增 `coral: 15`, `deep_mineral: 45`。
+  - 采集 deep_mineral 节点时有 20% 概率额外给予 `magic_crystal × 1`。
+
+### 6.17.4 客户端
+- **类型** (`api/types.ts`)：`ResourceType` 增加 `'coral' | 'deep_mineral'`。
+- **PreloadScene** (`game/scenes/PreloadScene.ts`)：`RESOURCE_COLORS` 新增 `coral: 0xff6b9d`（粉色），`deep_mineral: 0x7e57c2`（紫色）。
+- **GameView** (`views/GameView.vue`)：`ITEM_LABELS` 新增 `coral: '珊瑚'`, `deep_mineral: '深海矿物'`, `magic_crystal: '魔水晶'`。
+
+### 6.17.5 验证方式
+- 服务端 `tsc --noEmit` ✅
+- 客户端 `npm run build` ✅
+- E2E：进入海洋区块 → 看到珊瑚/深海矿物节点 → 采集 → 背包获得 coral/deep_mineral → 深海矿物有概率额外获得 magic_crystal。
+
+### 6.17.6 注意事项
+- 原 HANDOFF §6.14.7 记录的 `magic_crystal` 无产出途径问题已解决：深海矿物 20% 概率掉落。
+- 海洋区块判定使用 `MovementService.isOceanChunk()`，与地形生成逻辑共享同一常量 `OCEAN_CHUNK_WIDTH = 5`。
 
 ---
 

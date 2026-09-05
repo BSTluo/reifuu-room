@@ -1,11 +1,12 @@
 import { query } from '../db/mysql.js';
 import logger from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { isOceanChunk } from './MovementService.js';
 
 interface ResourceNode {
   id: number;
   chunkId: string;
-  resourceType: 'wood' | 'stone' | 'mineral';
+  resourceType: 'wood' | 'stone' | 'mineral' | 'coral' | 'deep_mineral';
   position: { x: number; y: number };
   isDepleted: boolean;
   respawnAt: Date | null;
@@ -13,17 +14,21 @@ interface ResourceNode {
 
 export class ResourceService {
   // Respawn times in minutes
-  private readonly RESPAWN_TIMES = {
+  private readonly RESPAWN_TIMES: Record<string, number> = {
     wood: 5,
     stone: 10,
     mineral: 30,
+    coral: 15,
+    deep_mineral: 45,
   };
 
   // Collect distance threshold
   private readonly COLLECT_DISTANCE = 2;
 
   /**
-   * Generate initial resource nodes for a chunk
+   * Generate initial resource nodes for a chunk.
+   * Ocean chunks: coral + deep_mineral (GDD §2.8 海洋区块内容).
+   * Land chunks: wood + stone + mineral (original behavior).
    */
   async generateResourcesForChunk(chunkId: string): Promise<void> {
     try {
@@ -37,25 +42,42 @@ export class ResourceService {
         return; // Already generated
       }
 
-      // Generate 3-5 wood nodes
-      const woodCount = 3 + Math.floor(Math.random() * 3);
-      for (let i = 0; i < woodCount; i++) {
-        await this.createResourceNode(chunkId, 'wood');
-      }
+      // Parse chunk ID to determine terrain
+      const parts = chunkId.split('_').map(Number);
+      const chunkX = parts[0] ?? 0;
+      const chunkY = parts[1] ?? 0;
+      const ocean = isOceanChunk(chunkX, chunkY);
 
-      // Generate 2-4 stone nodes
-      const stoneCount = 2 + Math.floor(Math.random() * 3);
-      for (let i = 0; i < stoneCount; i++) {
-        await this.createResourceNode(chunkId, 'stone');
+      if (ocean) {
+        // Ocean chunk: coral (2-4) + deep_mineral (0-2, rare)
+        const coralCount = 2 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < coralCount; i++) {
+          await this.createResourceNode(chunkId, 'coral');
+        }
+        // 60% chance of deep_mineral nodes
+        if (Math.random() < 0.6) {
+          const deepCount = 1 + Math.floor(Math.random() * 2);
+          for (let i = 0; i < deepCount; i++) {
+            await this.createResourceNode(chunkId, 'deep_mineral');
+          }
+        }
+        logger.info(`Generated ocean resources for chunk ${chunkId}`);
+      } else {
+        // Land chunk: original behavior
+        const woodCount = 3 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < woodCount; i++) {
+          await this.createResourceNode(chunkId, 'wood');
+        }
+        const stoneCount = 2 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < stoneCount; i++) {
+          await this.createResourceNode(chunkId, 'stone');
+        }
+        const mineralCount = 1 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < mineralCount; i++) {
+          await this.createResourceNode(chunkId, 'mineral');
+        }
+        logger.info(`Generated land resources for chunk ${chunkId}`);
       }
-
-      // Generate 1-2 mineral nodes
-      const mineralCount = 1 + Math.floor(Math.random() * 2);
-      for (let i = 0; i < mineralCount; i++) {
-        await this.createResourceNode(chunkId, 'mineral');
-      }
-
-      logger.info(`Generated resources for chunk ${chunkId}`);
     } catch (error) {
       logger.error('Failed to generate resources', error);
     }
@@ -66,7 +88,7 @@ export class ResourceService {
    */
   private async createResourceNode(
     chunkId: string,
-    resourceType: 'wood' | 'stone' | 'mineral'
+    resourceType: 'wood' | 'stone' | 'mineral' | 'coral' | 'deep_mineral'
   ): Promise<void> {
     // Parse chunk ID to get base position
     const parts = chunkId.split('_').map(Number);
@@ -148,7 +170,7 @@ export class ResourceService {
       }
 
       // Mark as depleted and set respawn time
-      const respawnMinutes = this.RESPAWN_TIMES[node.resource_type as keyof typeof this.RESPAWN_TIMES];
+      const respawnMinutes = this.RESPAWN_TIMES[node.resource_type as string] ?? 10;
       await query(
         `UPDATE resource_nodes
          SET is_depleted = TRUE, respawn_at = DATE_ADD(NOW(), INTERVAL ? MINUTE)
@@ -158,6 +180,12 @@ export class ResourceService {
 
       // Add to inventory
       await this.addToInventory(characterId, node.resource_type, 1);
+
+      // deep_mineral nodes have a 20% chance to also yield magic_crystal (rare material for airship)
+      if (node.resource_type === 'deep_mineral' && Math.random() < 0.2) {
+        await this.addToInventory(characterId, 'magic_crystal', 1);
+        logger.info(`Character ${characterId} found magic_crystal in deep_mineral node ${resourceNodeId}`);
+      }
 
       logger.info(`Character ${characterId} collected ${node.resource_type} from node ${resourceNodeId}`);
 

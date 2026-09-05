@@ -1,6 +1,6 @@
 import { io, Socket } from 'socket.io-client'
 import { EventBus } from '../EventBus'
-import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO, FurnitureItemDTO, FriendChatMessageDTO } from '../../api/types'
+import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO, FurnitureItemDTO, FriendChatMessageDTO, PassengerInviteDTO, PassengerRideDTO } from '../../api/types'
 import type { TownDTO } from '../EventBus'
 
 export interface ServerToClientEvents {
@@ -62,6 +62,17 @@ export interface ServerToClientEvents {
   // Furniture events (server -> client)
   'room:furniture': (data: { roomId: string; furniture: FurnitureItemDTO[] }) => void
   'room:furniture-changed': (data: { roomId: string; action: 'placed' | 'moved' | 'removed'; furniture: FurnitureItemDTO }) => void
+  // Passenger events (server -> client, GMD §2.8 载客)
+  'passenger:invite-sent': (data: { invite: PassengerInviteDTO }) => void
+  'passenger:invited': (data: { invite: PassengerInviteDTO }) => void
+  'passenger:boarded': (data: { ride: PassengerRideDTO }) => void
+  'passenger:rejected': (data: { inviteId: number }) => void
+  'passenger:exited': (data: Record<string, never>) => void
+  'passenger:left': (data: { passengerCharacterId: number }) => void
+  'passenger:kicked': (data: { inviteId: number }) => void
+  'passenger:forced-exit': (data: { reason: string }) => void
+  'passenger:pending-invites': (data: { invites: PassengerInviteDTO[] }) => void
+  'passenger:position-sync': (data: { position: { x: number; y: number }; chunkId: string }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -110,6 +121,13 @@ export interface ClientToServerEvents {
   // Furniture events (client -> server)
   'room:furniture-request': (data: { roomId: string }) => void
   'room:furniture-changed': (data: { roomId: string; action: 'placed' | 'moved' | 'removed'; furniture: FurnitureItemDTO }) => void
+  // Passenger events (client -> server, GMD §2.8 载客)
+  'vehicle:invite-passenger': (data: { passengerCharacterId: number }) => void
+  'vehicle:accept-board': (data: { inviteId: number }) => void
+  'vehicle:reject-board': (data: { inviteId: number }) => void
+  'vehicle:exit': () => void
+  'vehicle:kick-passenger': (data: { inviteId: number }) => void
+  'vehicle:pending-invites': () => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -291,6 +309,38 @@ class SocketClient {
     })
     this.socket.on('team:chat-message', (data: TeamChatMessageDTO) => {
       EventBus.emit('team:chat-message', data)
+    })
+
+    // Passenger events: forward to EventBus for the vehicle store / UI
+    this.socket.on('passenger:invite-sent', (data: { invite: PassengerInviteDTO }) => {
+      EventBus.emit('passenger:invite-sent', data)
+    })
+    this.socket.on('passenger:invited', (data: { invite: PassengerInviteDTO }) => {
+      EventBus.emit('passenger:invited', data)
+    })
+    this.socket.on('passenger:boarded', (data: { ride: PassengerRideDTO }) => {
+      EventBus.emit('passenger:boarded', data)
+    })
+    this.socket.on('passenger:rejected', (data: { inviteId: number }) => {
+      EventBus.emit('passenger:rejected', data)
+    })
+    this.socket.on('passenger:exited', (_data) => {
+      EventBus.emit('passenger:exited', {})
+    })
+    this.socket.on('passenger:left', (data: { passengerCharacterId: number }) => {
+      EventBus.emit('passenger:left', data)
+    })
+    this.socket.on('passenger:kicked', (data: { inviteId: number }) => {
+      EventBus.emit('passenger:kicked', data)
+    })
+    this.socket.on('passenger:forced-exit', (data: { reason: string }) => {
+      EventBus.emit('passenger:forced-exit', data)
+    })
+    this.socket.on('passenger:pending-invites', (data: { invites: PassengerInviteDTO[] }) => {
+      EventBus.emit('passenger:pending-invites', data)
+    })
+    this.socket.on('passenger:position-sync', (data: { position: { x: number; y: number }; chunkId: string }) => {
+      EventBus.emit('passenger:position-sync', data)
     })
 
     this.socket.on('disconnect', (reason) => {

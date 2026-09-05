@@ -22,6 +22,7 @@ import PigeonMailPanel from '../components/game/HUD/PigeonMailPanel.vue'
 import TeamPanel from '../components/game/HUD/TeamPanel.vue'
 import TownPortalPanel from '../components/game/HUD/TownPortalPanel.vue'
 import InviteCodePanel from '../components/game/HUD/InviteCodePanel.vue'
+import PassengerPanel from '../components/game/HUD/PassengerPanel.vue'
 import PlayerInfoCard from '../components/game/HUD/PlayerInfoCard.vue'
 import { apiGet, apiPost, ApiRequestError } from '../api/http'
 import type { BuildTemplateDTO } from '../api/types'
@@ -70,6 +71,7 @@ const showInventory = ref(false)
 const showVehicle = ref(false)
 const showBuildMenu = ref(false)
 const showOwnership = ref(false)
+const showPassenger = ref(false)
 const templates = ref<BuildTemplateDTO[]>([])
 const buildForm = ref({ roomName: '' })
 const buildMessage = ref<{ text: string; type: 'info' | 'warn' | 'error' | 'success' } | null>(null)
@@ -82,6 +84,9 @@ const ITEM_LABELS: Record<string, string> = {
   wood: '木材',
   stone: '石材',
   mineral: '矿石',
+  coral: '珊瑚',
+  deep_mineral: '深海矿物',
+  magic_crystal: '魔法水晶',
 }
 const TEMPLATE_LABELS: Record<string, string> = {
   wooden_house: '木屋',
@@ -388,6 +393,10 @@ onBeforeUnmount(() => {
         </button>
         <button class="action-btn" @click="showTownPortal = !showTownPortal">🌀 城镇传送</button>
         <button class="action-btn" @click="showInviteCode = !showInviteCode">📨 邀请码</button>
+        <button class="action-btn" @click="showPassenger = !showPassenger">
+          🚗 载客
+          <span v-if="vehicleStore.pendingInvites.length" class="mail-badge">{{ vehicleStore.pendingInvites.length }}</span>
+        </button>
       </div>
       <div v-if="roomStore.pendingInvitations.length > 0" class="panel room-invitations-panel">
         <h3>房间邀请</h3>
@@ -481,6 +490,9 @@ onBeforeUnmount(() => {
       <div v-if="showOwnership" class="panel">
         <ChunkOwnershipPanel />
       </div>
+      <div v-if="showPassenger" class="panel">
+        <PassengerPanel />
+      </div>
     </div>
 
     <!-- 移动端菜单抽屉 -->
@@ -539,6 +551,11 @@ onBeforeUnmount(() => {
             <button class="mobile-action-btn" @click="showInviteCode = !showInviteCode; showMobileMenu = false">
               <span class="mobile-btn-icon">📨</span>
               <span class="mobile-btn-label">邀请码</span>
+            </button>
+            <button class="mobile-action-btn" @click="showPassenger = !showPassenger; showMobileMenu = false">
+              <span class="mobile-btn-icon">🚗</span>
+              <span class="mobile-btn-label">载客</span>
+              <span v-if="vehicleStore.pendingInvites.length" class="mail-badge">{{ vehicleStore.pendingInvites.length }}</span>
             </button>
           </div>
           
@@ -718,6 +735,17 @@ onBeforeUnmount(() => {
           </div>
           <div class="mobile-panel-content">
             <InviteCodePanel />
+          </div>
+        </div>
+      </div>
+      <div v-if="isMobile && showPassenger" class="mobile-panel-overlay">
+        <div class="mobile-panel">
+          <div class="mobile-panel-header">
+            <h3>载客系统</h3>
+            <button class="close-panel-btn" @click="showPassenger = false">✕</button>
+          </div>
+          <div class="mobile-panel-content">
+            <PassengerPanel />
           </div>
         </div>
       </div>

@@ -12,6 +12,8 @@ const RESOURCE_COLORS: Record<string, number> = {
   wood: 0x8b5a2b,
   stone: 0x9e9e9e,
   mineral: 0x64b5f6,
+  coral: 0xff6b9d,
+  deep_mineral: 0x7e57c2,
 }
 /**
  * 资源加载骨架：Phase 1 阶段用 Graphics 生成临时的等距 tile 与角色占位贴图，

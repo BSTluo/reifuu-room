@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS characters (
 CREATE TABLE IF NOT EXISTS resource_nodes (
     id INT AUTO_INCREMENT PRIMARY KEY,
     chunk_id VARCHAR(50) NOT NULL,
-    resource_type ENUM('wood', 'stone', 'mineral') NOT NULL,
+    resource_type ENUM('wood', 'stone', 'mineral', 'coral', 'deep_mineral') NOT NULL,
     grid_x FLOAT NOT NULL,
     grid_y FLOAT NOT NULL,
     is_depleted BOOLEAN DEFAULT FALSE,
@@ -155,6 +155,24 @@ CREATE TABLE IF NOT EXISTS vehicles (
     FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE,
     INDEX idx_vehicle_character (character_id),
     INDEX idx_vehicle_equipped (character_id, equipped)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Vehicle passengers table (GDD §2.8 载客能力)
+CREATE TABLE IF NOT EXISTS vehicle_passengers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    vehicle_id INT NOT NULL,
+    driver_character_id INT NOT NULL,
+    passenger_character_id INT NOT NULL,
+    status ENUM('pending', 'boarding', 'onboard', 'rejected') NOT NULL DEFAULT 'pending',
+    invited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    boarded_at TIMESTAMP NULL,
+    left_at TIMESTAMP NULL,
+    FOREIGN KEY (vehicle_id) REFERENCES vehicles(id) ON DELETE CASCADE,
+    FOREIGN KEY (driver_character_id) REFERENCES characters(id) ON DELETE CASCADE,
+    FOREIGN KEY (passenger_character_id) REFERENCES characters(id) ON DELETE CASCADE,
+    INDEX idx_passenger_vehicle (vehicle_id),
+    INDEX idx_passenger_passenger (passenger_character_id, status),
+    INDEX idx_passenger_driver (driver_character_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Chat rooms table
