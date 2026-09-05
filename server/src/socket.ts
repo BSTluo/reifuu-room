@@ -401,6 +401,19 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       logger.info(`${character?.nickname ?? 'unknown'} left chat room ${roomId}`);
     });
 
+    socket.on('room:membership-refresh', async (data: { roomId: string }) => {
+      if (!character) return;
+      const roomId = String(data?.roomId ?? '');
+      if (!/^\d+$/.test(roomId)) return;
+      try {
+        await RoomMembershipService.requireAccess(roomId, character.id);
+        const members = await getRoomMembers(io, `room:${roomId}`);
+        io.to(`room:${roomId}`).emit('room:members', { roomId, members });
+      } catch (error: any) {
+        socket.emit('error', { message: error.message || 'Failed to refresh room members' });
+      }
+    });
+
     // Send a chat message to a room (persist + broadcast)
     socket.on('room:message', async (data: { roomId: string; content: string }) => {
       if (!character) {

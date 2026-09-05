@@ -137,6 +137,9 @@ export const useRoomStore = defineStore('room', {
       const token = useUserStore().accessToken ?? undefined
       await apiPost(`/room/invitations/${invitationId}/respond`, { accept }, token)
       this.invitations = this.invitations.filter((item) => item.id !== invitationId)
+      if (accept && this.roomId) {
+        socketClient.instance?.emit('room:membership-refresh', { roomId: this.roomId })
+      }
       this.pendingInvitations = this.pendingInvitations.filter((item) => item.id !== invitationId)
     },
     async fetchPendingInvitations() {
@@ -148,6 +151,9 @@ export const useRoomStore = defineStore('room', {
       const token = useUserStore().accessToken ?? undefined
       if (this.roomId) await apiDelete(`/room/${this.roomId}/members/${characterId}`, token)
       this.members = this.members.filter((member) => member.characterId !== characterId)
+      if (this.roomId) {
+        socketClient.instance?.emit('room:membership-refresh', { roomId: this.roomId })
+      }
     },
   },
 })

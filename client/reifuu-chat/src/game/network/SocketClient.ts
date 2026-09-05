@@ -69,6 +69,7 @@ export interface ClientToServerEvents {
   'room:join': (data: { roomId: string }) => void
   'room:leave': (data: { roomId: string }) => void
   'room:message': (data: { roomId: string; content: string }) => void
+  'room:membership-refresh': (data: { roomId: string }) => void
   // Plugin events (client -> server)
   'plugin:activate': (data: { roomId: string; pluginId: string }) => void
   'plugin:deactivate': (data: { roomId: string; pluginId: string }) => void

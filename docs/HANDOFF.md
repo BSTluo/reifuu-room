@@ -164,6 +164,7 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 - REST：`GET /room/:roomId/membership`、`POST /room/:roomId/invitations`（owner，`characterId`）、`POST /room/invitations/:invitationId/respond`（`accept`）、`GET /room/invitations/pending`、`DELETE /room/:roomId/members/:characterId`。
 - Socket `room:join`、`room:message`、插件与家具请求均执行成员授权。建房时 owner 自动写入成员表；接受邀请使用事务更新邀请并加入成员。
 - 前端 room store/GameView 全局“房间邀请”面板可在进入房间前拉取并接受/拒绝邀请；ChatPanel 展示成员、owner 邀请并支持移除成员。待接受邀请不会获得房间预览、加入或聊天权限。
+- 成员接受邀请或被房主移除后，客户端可通过 `room:membership-refresh` 触发在线成员列表广播，避免必须重新进入房间才能看到变更。
 - socket 事件（`server/src/socket.ts`，用 Socket.io 房间 `room:<id>` 广播）：
   - `room:join`（C→S，`{ roomId }`）→ 加入者收 `room:history` + `room:members`，房间内其他人收更新后的 `room:members`。
   - `room:leave`（C→S，`{ roomId }`）→ 离开并广播更新后的成员列表。
