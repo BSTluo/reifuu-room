@@ -2,7 +2,7 @@
 
 > 本文件用于**当前团队 → 下一个团队**的工作交接。它记录项目当前真实状态、已完成/进行中/待办工作、团队结构、运行方式与已知问题。
 > 下一个团队接手时，请先通读本文件 + `docs/GDD.md`，再检查代码现状。
-> 最后更新：2026-09-05（出生方式与出生点分配追加）
+> 最后更新：2026-09-05（邀请码出生系统追加）
 
 ---
 
@@ -66,8 +66,8 @@ npm run dev        # Vite，端口 5173
 
 ### 4.1 登录 / 注册 / 角色创建
 - 认证：JWT（access + refresh），`server/src/routes/auth.ts`、`server/src/services/AuthService.ts`、`server/src/middleware/auth.ts`。
-- 角色：`GET /character/me`（存在性检查，带 Redis 缓存）、`POST /character/create`（一人一角色，昵称唯一，出生点写**世界坐标**）。创角支持 `spawnMethod`：`unowned`（默认，随机无主空地/资源区块）或 `public`（随机公开玩家区块）；没有候选时回退到对应大洲的 `10_10`。
-- 出生候选在事务中锁定；无主候选创建后会标记 `map_chunks.owner_id`，降低并发重复分配。数据库变更见 `server/src/db/migrations/005-character-spawn-method.sql`，全新安装请使用 `schema.sql`。
+- 角色：`GET /character/me`（存在性检查，带 Redis 缓存）、`POST /character/create`（一人一角色，昵称唯一，出生点写**世界坐标**）。创角支持 `spawnMethod`：`unowned`（默认，随机无主空地/资源区块）、`public`（随机公开玩家区块）、`invited`（邀请码出生，需传 `inviteCode` 字段，出生到邀请者所在区块）；没有候选时回退到对应大洲的 `10_10`。
+- 出生候选在事务中锁定；无主候选创建后会标记 `map_chunks.owner_id`，降低并发重复分配。邀请码消费也在事务内原子完成。数据库变更见 `server/src/db/migrations/005-character-spawn-method.sql` + `007-invite-code-spawn.sql`，全新安装请使用 `schema.sql`。
 - 坐标系约定：每区块 32x32 格，`世界坐标 = chunkX*32 + gridX`。无候选时回退到各大洲区块 `10_10` 的 (325, 325)。
 - 前端：`AuthView.vue`、`CharacterCreateView.vue`、`stores/user.ts`、`stores/character.ts`、`App.vue`。
 
@@ -509,6 +509,50 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 
 ---
 
+## 6.15 ⭐ 邀请码出生系统（GDD §2.1「邀请码出生」，✅ 前后端均已完成）
+
+**任务状态**：已完成。GDD §2.1 第三种出生方式 `invited`（邀请码出生），原标注"Phase 3 后扩展"，现提前实现。
+
+### 6.15.1 功能概述
+- 已有角色的玩家可生成邀请码（8位字母数字，排除易混淆字符 0/O/1/I），分享给好友。
+- 新玩家创建角色时选择「邀请码出生」并输入邀请码，直接出生在邀请者当前所在区块的固定坐标 (5,5) → 世界坐标 `(chunkX*32+5, chunkY*32+5)`。
+- 邀请码为一次性使用，消费在角色创建事务内原子完成（防并发竞争）。
+- 每个邀请者最多持有 5 个 active 邀请码，可主动撤销。
+
+### 6.15.2 数据库
+- **Migration**：`server/src/db/migrations/007-invite-code-spawn.sql`
+  - `ALTER TABLE characters MODIFY spawn_method ENUM('unowned','public','invited')`
+  - `CREATE TABLE invite_codes`（`code VARCHAR(8) UNIQUE`, `inviter_character_id`, `used_by_character_id`, `status ENUM('active','used','revoked')`, timestamps）
+- `schema.sql` 已同步更新。
+
+### 6.15.3 服务端
+- **InviteCodeService** (`server/src/services/InviteCodeService.ts`)：
+  - `generateCode(characterId)` — 生成 8 字符码（`ABCDEFGHJKLMNPQRSTUVWXYZ23456789` 字母表），`crypto.randomBytes`，最多 5 次重试避碰撞，每人最多 5 个 active。
+  - `validateForSpawn(code)` — 验证码有效性并返回邀请者 chunk 坐标（不修改状态）。
+  - `markUsedOnConnection(conn, code, newCharacterId)` — 在事务内消费邀请码（`SELECT ... FOR UPDATE` + `UPDATE ... SET status='used'`），若 `affectedRows=0` 则抛错触发回滚。
+  - `listByInviter(characterId)` — 列出邀请者所有邀请码（含 used_by_nickname）。
+  - `revokeInviteCode(characterId, codeId)` — 撤销 active 邀请码。
+- **CharacterService**：`createCharacter` 新增 `inviteCode` 参数。`spawnMethod='invited'` 时：先 `validateForSpawn` 获取邀请者区块坐标 → 事务内 `markUsedOnConnection` 原子消费 → 使用邀请者区块 (5,5) 作为出生点。
+- **SpawnPointService**：`getSpawnOptions()` 返回三个选项（unowned/public/invited），`SpawnMethod` 类型增加 `'invited'`。
+- **Routes** (`server/src/routes/character.ts`)：
+  - `POST /character/create` 增加 `inviteCode` 字段。
+  - `POST /character/invite-code` — 生成邀请码。
+  - `GET /character/invite-code` — 列出当前角色邀请码。
+  - `DELETE /character/invite-code/:codeId` — 撤销邀请码。
+
+### 6.15.4 客户端
+- **类型** (`api/types.ts`)：`SpawnMethod` 增加 `'invited'`；`InviteCodeDTO` 含 `id/code/inviterCharacterId/inviterNickname/status/createdAt/usedAt/usedByNickname`。
+- **Store** (`stores/character.ts`)：新增 `inviteCodes`/`inviteError` state；`createInviteCode()`/`listInviteCodes()`/`revokeInviteCode()` 方法（带 state 更新与错误处理）。
+- **创角 UI** (`views/CharacterCreateView.vue`)：出生方式增加「邀请码出生」按钮，选中后显示邀请码输入框（大写、字间距），预览区显示输入的邀请码。
+- **游戏内 UI** (`components/game/HUD/InviteCodePanel.vue`)：邀请码管理面板，生成/复制/撤销邀请码，显示状态与使用者昵称。已挂载到 `GameView.vue` 的 action-panel（📨 邀请码按钮）和移动端菜单/overlay。
+
+### 6.15.5 关键设计决策
+- **邀请码即授权**：生成邀请码即视为授权对方出生到自己当前区块，不需要额外手动审批。
+- **事务原子消费**：`markUsedOnConnection` 在 `CharacterService` 的 DB 事务内执行，两人同时用同一码时只有一人成功。
+- **CHUNK_SIZE=32**：区块到世界坐标转换 `worldX = chunkX * 32 + 5`，与服务端 `CharacterService`、客户端 `world.ts` 保持一致。
+
+---
+
 ## 7. 测试账号（仍在数据库中）
 
 | 账号 | 密码 | 角色 | 出生区块 | 世界坐标 |
@@ -544,6 +588,7 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 - ~~前端迷雾完全未做~~（**已解决**，§5.2 完成）。
 - 小地图、资源节点/建造/聊天室前端交互 UI（**已补齐**：`WorldScene` 资源节点渲染 + `GameView` 背包/建造面板）。
 - ~~好友系统~~（**已完成** §6.7）；高级交通工具系统仍未实现（GDD Phase 4.5：船只/飞行器跨洲、海洋区块类型、载客逻辑）。
+  - ~~高级交通工具~~（**已完成** §6.14：船只/飞艇/海洋区块/海岸寻路，2026-09 追加）。
 - 聊天室公开房间仍支持访客访问；私有房间使用 §6.2 的邀请制成员权限。
 - ~~飞鸽传信~~（**已完成** §6.8）：仅建表 → 现 service/routes/socket/UI 均已实现并验证通过。
 - 数据库 `192.168.12.1` 是内网地址，换环境/远程时需改 `.env`（曾有短暂不可达导致 500）。
@@ -563,7 +608,8 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 7. ~~规划 Phase 3（好友/社交、传送门）~~（**好友系统已完成** §6.7，**飞鸽传信已完成** §6.8，**团队系统已完成** §6.9，**传送门系统已完成** §6.12）与 Phase 4（交通工具）。
 8. ~~移动端适配~~（**已完成** §6.11）：虚拟摇杆、响应式布局、触摸优化已全部实现，可接受移动设备测试。
 9. **后续功能**：
-   - 高级交通工具（Phase 4.5）：船只、飞行器跨洲。
+   - ~~高级交通工具（Phase 4.5）：船只、飞行器跨洲。~~（**已完成** §6.14）
+   - ~~邀请码出生系统（GDD §2.1）~~（**已完成** §6.15）。
    - 房间装饰/家具系统扩展：自定义贴图、动画。
 10. 建议为前端新增 UI/UX 专职成员补齐界面质感（该角色上一团队已移除）。
 11. 前端接入正式美术资源时替换 `PreloadScene` 的 Graphics 生成贴图（贴图 key 不变即可平滑替换）。

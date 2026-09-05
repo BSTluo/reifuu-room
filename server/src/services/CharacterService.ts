@@ -2,6 +2,7 @@ import { getConnection, query } from '../db/mysql.js';
 import { getRedis } from '../db/redis.js';
 import logger from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
+import InviteCodeService from './InviteCodeService.js';
 
 interface Appearance {
   gender: string;
@@ -16,10 +17,10 @@ interface ContinentSpawnPoint {
   gridX: number;
   gridY: number;
 }
-type SpawnMethod = 'unowned' | 'public';
+type SpawnMethod = 'unowned' | 'public' | 'invited';
 
 function isSpawnMethod(value: string | undefined): value is SpawnMethod {
-  return value === 'unowned' || value === 'public';
+  return value === 'unowned' || value === 'public' || value === 'invited';
 }
 
 const SPAWN_POINTS: Record<string, ContinentSpawnPoint> = {
@@ -35,7 +36,8 @@ export class CharacterService {
     nickname: string,
     appearance: Appearance,
     startContinent: string,
-    requestedSpawnMethod?: string
+    requestedSpawnMethod?: string,
+    inviteCode?: string
   ) {
     try {
       // Validate continent
@@ -45,6 +47,9 @@ export class CharacterService {
       const spawnMethod = requestedSpawnMethod ?? 'unowned';
       if (!isSpawnMethod(spawnMethod)) {
         throw new AppError('Invalid spawn method', 400);
+      }
+      if (spawnMethod === 'invited' && !inviteCode) {
+        throw new AppError('邀请码出生需要提供邀请码', 400);
       }
 
       // Validate appearance fields
@@ -74,6 +79,13 @@ export class CharacterService {
 
       const fallback = SPAWN_POINTS[startContinent];
       if (!fallback) throw new AppError('No spawn point configured for continent', 500);
+
+      // 邀请码出生：先验证邀请码获取出生信息（不消费，消费在事务内）
+      let inviteSpawnInfo: Awaited<ReturnType<typeof InviteCodeService.validateForSpawn>> | null = null;
+      if (spawnMethod === 'invited') {
+        inviteSpawnInfo = await InviteCodeService.validateForSpawn(inviteCode!);
+      }
+
       const connection = await getConnection();
       let chunkId: string;
       let worldX: number;
@@ -81,24 +93,32 @@ export class CharacterService {
       let characterId: number;
       try {
         await connection.beginTransaction();
-        const [candidates]: any = await connection.execute(
-          `SELECT chunk_id, chunk_x, chunk_y
-           FROM map_chunks
-           WHERE ${spawnMethod === 'unowned'
-             ? "owner_id IS NULL AND chunk_type IN ('empty', 'resource')"
-             : 'owner_id IS NOT NULL AND is_public = TRUE'}
-           ORDER BY RAND()
-           LIMIT 1
-           FOR UPDATE`
-        );
-        const candidate = Array.isArray(candidates) && candidates.length > 0 ? candidates[0] : null;
-        const chunkX = candidate ? Number(candidate.chunk_x) : fallback.chunkX;
-        const chunkY = candidate ? Number(candidate.chunk_y) : fallback.chunkY;
-        chunkId = candidate ? String(candidate.chunk_id) : `${chunkX}_${chunkY}`;
-        const gridX = candidate ? Math.floor(Math.random() * 30) + 1 : fallback.gridX;
-        const gridY = candidate ? Math.floor(Math.random() * 30) + 1 : fallback.gridY;
-        worldX = chunkX * 32 + gridX;
-        worldY = chunkY * 32 + gridY;
+
+        if (spawnMethod === 'invited' && inviteSpawnInfo) {
+          // 邀请码出生：使用邀请者所在区块
+          chunkId = inviteSpawnInfo.chunkId;
+          worldX = inviteSpawnInfo.worldX;
+          worldY = inviteSpawnInfo.worldY;
+        } else {
+          const [candidates]: any = await connection.execute(
+            `SELECT chunk_id, chunk_x, chunk_y
+             FROM map_chunks
+             WHERE ${spawnMethod === 'unowned'
+               ? "owner_id IS NULL AND chunk_type IN ('empty', 'resource')"
+               : 'owner_id IS NOT NULL AND is_public = TRUE'}
+             ORDER BY RAND()
+             LIMIT 1
+             FOR UPDATE`
+          );
+          const candidate = Array.isArray(candidates) && candidates.length > 0 ? candidates[0] : null;
+          const chunkX = candidate ? Number(candidate.chunk_x) : fallback.chunkX;
+          const chunkY = candidate ? Number(candidate.chunk_y) : fallback.chunkY;
+          chunkId = candidate ? String(candidate.chunk_id) : `${chunkX}_${chunkY}`;
+          const gridX = candidate ? Math.floor(Math.random() * 30) + 1 : fallback.gridX;
+          const gridY = candidate ? Math.floor(Math.random() * 30) + 1 : fallback.gridY;
+          worldX = chunkX * 32 + gridX;
+          worldY = chunkY * 32 + gridY;
+        }
 
         const [result]: any = await connection.execute(
           `INSERT INTO characters
@@ -107,7 +127,12 @@ export class CharacterService {
           [userId, nickname, JSON.stringify(appearance), startContinent, spawnMethod, chunkId, worldX, worldY]
         );
         characterId = Number(result.insertId);
-        if (candidate && spawnMethod === 'unowned') {
+
+        // 邀请码出生：消费邀请码（在事务内，保证原子性）
+        if (spawnMethod === 'invited' && inviteSpawnInfo) {
+          await InviteCodeService.markUsedOnConnection(connection, inviteSpawnInfo.codeId, characterId);
+        } else if (spawnMethod === 'unowned') {
+          // 无主地块出生：领取该区块所有权
           await connection.execute('UPDATE map_chunks SET owner_id = ? WHERE chunk_id = ? AND owner_id IS NULL', [
             characterId,
             chunkId,

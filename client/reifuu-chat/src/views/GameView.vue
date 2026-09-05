@@ -21,6 +21,7 @@ import MailboxPanel from '../components/game/HUD/MailboxPanel.vue'
 import PigeonMailPanel from '../components/game/HUD/PigeonMailPanel.vue'
 import TeamPanel from '../components/game/HUD/TeamPanel.vue'
 import TownPortalPanel from '../components/game/HUD/TownPortalPanel.vue'
+import InviteCodePanel from '../components/game/HUD/InviteCodePanel.vue'
 import PlayerInfoCard from '../components/game/HUD/PlayerInfoCard.vue'
 import { apiGet, apiPost, ApiRequestError } from '../api/http'
 import type { BuildTemplateDTO } from '../api/types'
@@ -40,6 +41,7 @@ const friendStore = useFriendStore()
 const pigeonStore = usePigeonStore()
 const teamStore = useTeamStore()
 const showTownPortal = ref(false)
+const showInviteCode = ref(false)
 const { isMobile } = useMobile()
 
 const phaserReady = ref(false)
@@ -385,6 +387,7 @@ onBeforeUnmount(() => {
           <span v-if="roomStore.pendingInvitations.length > 0" class="mail-badge">{{ roomStore.pendingInvitations.length }}</span>
         </button>
         <button class="action-btn" @click="showTownPortal = !showTownPortal">🌀 城镇传送</button>
+        <button class="action-btn" @click="showInviteCode = !showInviteCode">📨 邀请码</button>
       </div>
       <div v-if="roomStore.pendingInvitations.length > 0" class="panel room-invitations-panel">
         <h3>房间邀请</h3>
@@ -472,6 +475,9 @@ onBeforeUnmount(() => {
       <div v-if="showTownPortal" class="panel">
         <TownPortalPanel />
       </div>
+      <div v-if="showInviteCode" class="panel">
+        <InviteCodePanel />
+      </div>
       <div v-if="showOwnership" class="panel">
         <ChunkOwnershipPanel />
       </div>
@@ -529,6 +535,10 @@ onBeforeUnmount(() => {
               <span class="mobile-btn-icon">👥</span>
               <span class="mobile-btn-label">团队</span>
               <span v-if="teamStore.inTeam" class="team-badge">{{ teamStore.members.length }}</span>
+            </button>
+            <button class="mobile-action-btn" @click="showInviteCode = !showInviteCode; showMobileMenu = false">
+              <span class="mobile-btn-icon">📨</span>
+              <span class="mobile-btn-label">邀请码</span>
             </button>
           </div>
           
@@ -697,6 +707,17 @@ onBeforeUnmount(() => {
           </div>
           <div class="mobile-panel-content">
             <TeamPanel />
+          </div>
+        </div>
+      </div>
+      <div v-if="isMobile && showInviteCode" class="mobile-panel-overlay">
+        <div class="mobile-panel">
+          <div class="mobile-panel-header">
+            <h3>邀请码</h3>
+            <button class="close-panel-btn" @click="showInviteCode = false">✕</button>
+          </div>
+          <div class="mobile-panel-content">
+            <InviteCodePanel />
           </div>
         </div>
       </div>

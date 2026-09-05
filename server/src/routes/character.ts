@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import CharacterService from '../services/CharacterService.js';
 import SpawnPointService from '../services/SpawnPointService.js';
+import InviteCodeService from '../services/InviteCodeService.js';
 import { authenticate } from '../middleware/auth.js';
 import VehicleService from '../services/VehicleService.js';
 
@@ -22,7 +23,7 @@ router.get('/spawn-options', async (_req: Request, res: Response, next: NextFunc
 // Create character
 router.post('/create', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { nickname, appearance, startContinent, spawnMethod } = req.body;
+    const { nickname, appearance, startContinent, spawnMethod, inviteCode } = req.body;
     const userId = req.user?.userId;
 
     if (!userId) {
@@ -44,7 +45,8 @@ router.post('/create', async (req: Request, res: Response, next: NextFunction) =
       nickname,
       appearance,
       startContinent,
-      spawnMethod
+      spawnMethod,
+      inviteCode
     );
 
     res.status(201).json({ status: 'success', data: character });
@@ -75,6 +77,72 @@ router.get('/me', async (req: Request, res: Response, next: NextFunction) => {
     }
 
     res.json({ status: 'success', data: { ...character, equippedVehicle: await VehicleService.getEquipped(String(character.id)) } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ============ Invite code endpoints (GDD §2.1 邀请码出生) ============
+
+// Generate a new invite code (requires character)
+router.post('/invite-code', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ status: 'error', message: 'User not authenticated' });
+    }
+
+    const character = await CharacterService.getCharacterByUserId(userId);
+    if (!character) {
+      return res.status(404).json({ status: 'error', message: 'Character not found' });
+    }
+
+    const inviteCode = await InviteCodeService.createInviteCode(String(character.id));
+    res.status(201).json({ status: 'success', data: inviteCode });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// List current user's invite codes
+router.get('/invite-code', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({ status: 'error', message: 'User not authenticated' });
+    }
+
+    const character = await CharacterService.getCharacterByUserId(userId);
+    if (!character) {
+      return res.status(404).json({ status: 'error', message: 'Character not found' });
+    }
+
+    const codes = await InviteCodeService.listByInviter(String(character.id));
+    res.json({ status: 'success', data: codes });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Revoke an invite code
+router.delete('/invite-code/:codeId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.user?.userId;
+    const codeId = Number(req.params.codeId);
+    if (!userId) {
+      return res.status(401).json({ status: 'error', message: 'User not authenticated' });
+    }
+    if (!Number.isFinite(codeId)) {
+      return res.status(400).json({ status: 'error', message: 'Invalid code id' });
+    }
+
+    const character = await CharacterService.getCharacterByUserId(userId);
+    if (!character) {
+      return res.status(404).json({ status: 'error', message: 'Character not found' });
+    }
+
+    await InviteCodeService.revokeInviteCode(String(character.id), codeId);
+    res.json({ status: 'success', data: null });
   } catch (error) {
     next(error);
   }

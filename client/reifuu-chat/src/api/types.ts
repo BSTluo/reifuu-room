@@ -23,7 +23,7 @@ export interface RefreshResponse {
 }
 
 export type Continent = 'east' | 'south' | 'west' | 'north'
-export type SpawnMethod = 'unowned' | 'public'
+export type SpawnMethod = 'unowned' | 'public' | 'invited'
 
 export interface SpawnOptionDTO {
   method: SpawnMethod
@@ -31,6 +31,17 @@ export interface SpawnOptionDTO {
   description: string
   available: boolean
   poolSize: number
+}
+
+export interface InviteCodeDTO {
+  id: number
+  code: string
+  inviterCharacterId: number
+  inviterNickname: string
+  status: 'active' | 'used' | 'revoked'
+  createdAt: string
+  usedAt: string | null
+  usedByNickname: string | null
 }
 
 export interface CharacterAppearanceDTO {

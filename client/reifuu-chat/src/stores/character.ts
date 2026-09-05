@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
-import { apiGet, apiPost, ApiRequestError } from '../api/http'
-import type { CharacterAppearanceDTO, CharacterDTO, Continent, SpawnMethod, SpawnOptionDTO } from '../api/types'
+import { apiGet, apiPost, apiDelete, ApiRequestError } from '../api/http'
+import type { CharacterAppearanceDTO, CharacterDTO, Continent, SpawnMethod, SpawnOptionDTO, InviteCodeDTO } from '../api/types'
 import { useUserStore } from './user'
 
 interface CharacterState {
@@ -11,6 +11,8 @@ interface CharacterState {
   currentChunkId: string | null
   position: { x: number; y: number }
   hasCharacter: boolean | null
+  inviteCodes: InviteCodeDTO[]
+  inviteError: string | null
 }
 
 export const useCharacterStore = defineStore('character', {
@@ -22,6 +24,8 @@ export const useCharacterStore = defineStore('character', {
     currentChunkId: null,
     position: { x: 0, y: 0 },
     hasCharacter: null,
+    inviteCodes: [],
+    inviteError: null,
   }),
   actions: {
     applyCharacter(dto: CharacterDTO) {
@@ -69,6 +73,7 @@ export const useCharacterStore = defineStore('character', {
       appearance: CharacterAppearanceDTO
       startContinent: Continent
       spawnMethod?: SpawnMethod
+      inviteCode?: string
     }): Promise<void> {
       const userStore = useUserStore()
       const dto = await apiPost<CharacterDTO>('/character/create', {
@@ -85,6 +90,41 @@ export const useCharacterStore = defineStore('character', {
       const userStore = useUserStore()
       return apiGet<SpawnOptionDTO[]>('/character/spawn-options', userStore.accessToken ?? undefined)
     },
+    async createInviteCode(): Promise<InviteCodeDTO> {
+      const userStore = useUserStore()
+      try {
+        const code = await apiPost<InviteCodeDTO>('/character/invite-code', {}, userStore.accessToken ?? undefined)
+        this.inviteCodes.unshift(code)
+        this.inviteError = null
+        return code
+      } catch (error) {
+        this.inviteError = error instanceof Error ? error.message : '生成邀请码失败'
+        throw error
+      }
+    },
+    async listInviteCodes(): Promise<InviteCodeDTO[]> {
+      const userStore = useUserStore()
+      try {
+        const codes = await apiGet<InviteCodeDTO[]>('/character/invite-code', userStore.accessToken ?? undefined)
+        this.inviteCodes = codes
+        this.inviteError = null
+        return codes
+      } catch (error) {
+        this.inviteError = error instanceof Error ? error.message : '获取邀请码失败'
+        throw error
+      }
+    },
+    async revokeInviteCode(codeId: number): Promise<void> {
+      const userStore = useUserStore()
+      try {
+        await apiDelete(`/character/invite-code/${codeId}`, userStore.accessToken ?? undefined)
+        this.inviteCodes = this.inviteCodes.filter(c => c.id !== codeId)
+        this.inviteError = null
+      } catch (error) {
+        this.inviteError = error instanceof Error ? error.message : '撤销邀请码失败'
+        throw error
+      }
+    },
     reset() {
       this.characterId = null
       this.nickname = null
@@ -93,6 +133,8 @@ export const useCharacterStore = defineStore('character', {
       this.currentChunkId = null
       this.position = { x: 0, y: 0 }
       this.hasCharacter = null
+      this.inviteCodes = []
+      this.inviteError = null
     },
   },
 })

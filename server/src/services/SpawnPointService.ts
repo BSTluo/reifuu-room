@@ -12,7 +12,7 @@ import { AppError } from '../middleware/errorHandler.js';
  * 地块池缓存到 Redis，避免每次创角都全表扫描；地图数据变化时（建造/公开状态切换）主动失效。
  */
 
-export type SpawnMethod = 'unowned' | 'public';
+export type SpawnMethod = 'unowned' | 'public' | 'invited';
 
 export interface SpawnPointCandidate {
   chunkId: string;
@@ -213,6 +213,13 @@ export class SpawnPointService {
         description: '出生点周边可能已有其他玩家的聊天室/城镇雏形，更容易遇见其他玩家并快速融入社交。资源可能已部分被采集。',
         available: publicPool.length > 0,
         poolSize: publicPool.length,
+      },
+      {
+        method: 'invited',
+        label: '邀请码出生',
+        description: '输入好友的邀请码，直接出生到邀请者所在地块，立刻与好友一起游戏。',
+        available: true,
+        poolSize: 0,
       },
     ];
   }

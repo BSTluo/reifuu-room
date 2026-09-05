@@ -54,6 +54,7 @@ const appearance = reactive({
 const startContinent = ref<Continent>('east')
 const spawnMethod = ref<SpawnMethod>('unowned')
 const spawnOptions = ref<SpawnOptionDTO[]>([])
+const inviteCodeInput = ref('')
 
 const selectedSpawnOption = computed(() => spawnOptions.value.find((o) => o.method === spawnMethod.value))
 
@@ -108,6 +109,7 @@ async function handleCreate() {
       appearance: { ...appearance },
       startContinent: startContinent.value,
       spawnMethod: spawnMethod.value,
+      inviteCode: spawnMethod.value === 'invited' ? inviteCodeInput.value.trim() : undefined,
     })
     emit('character-created')
   } catch (error) {
@@ -242,6 +244,16 @@ function handleLogout() {
             <small>{{ option.description }}</small>
           </button>
         </div>
+        <div v-if="spawnMethod === 'invited'" class="invite-code-input">
+          <input
+            v-model="inviteCodeInput"
+            type="text"
+            placeholder="输入好友的邀请码（8 位字母数字）"
+            maxlength="16"
+            class="invite-code-field"
+          >
+          <p class="invite-hint">输入邀请码后，你将直接出生到邀请者所在地块。</p>
+        </div>
       </div>
 
       <div class="preview-box">
@@ -252,6 +264,9 @@ function handleLogout() {
         </p>
         <p class="preview-text">
           出生方式：{{ selectedSpawnOption?.label ?? '随机无主地块' }}
+        </p>
+        <p v-if="spawnMethod === 'invited'" class="preview-text">
+          邀请码：{{ inviteCodeInput.trim() || '（未输入）' }}
         </p>
       </div>
 
@@ -395,8 +410,35 @@ function handleLogout() {
 
 .spawn-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 10px;
+}
+
+.invite-code-input {
+  margin-top: 10px;
+}
+
+.invite-code-field {
+  width: 100%;
+  padding: 8px 12px;
+  background: #2c1810;
+  border: 2px solid #6d4c41;
+  border-radius: 4px;
+  color: #f5e6d3;
+  font-size: 14px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.invite-code-field:focus {
+  outline: none;
+  border-color: #ffb300;
+}
+
+.invite-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #b0a090;
 }
 
 .spawn-status {

@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS characters (
     nickname VARCHAR(50) UNIQUE NOT NULL,
     appearance JSON NOT NULL,
     start_continent ENUM('east', 'south', 'west', 'north') NOT NULL,
-    spawn_method ENUM('unowned', 'public') NOT NULL DEFAULT 'unowned',
+    spawn_method ENUM('unowned', 'public', 'invited') NOT NULL DEFAULT 'unowned',
     current_chunk_id VARCHAR(50) NOT NULL,
     grid_x FLOAT DEFAULT 0,
     grid_y FLOAT DEFAULT 0,
@@ -341,6 +341,22 @@ CREATE TABLE IF NOT EXISTS team_invitations (
     FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE,
     FOREIGN KEY (from_character_id) REFERENCES characters(id) ON DELETE CASCADE,
     FOREIGN KEY (to_character_id) REFERENCES characters(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Invite codes for spawn point system (GDD 2.1 邀请码出生)
+CREATE TABLE IF NOT EXISTS invite_codes (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    code VARCHAR(16) NOT NULL UNIQUE,
+    inviter_character_id INT NOT NULL,
+    used_by_character_id INT NULL,
+    status ENUM('active', 'used', 'revoked') NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    used_at TIMESTAMP NULL,
+    FOREIGN KEY (inviter_character_id) REFERENCES characters(id) ON DELETE CASCADE,
+    FOREIGN KEY (used_by_character_id) REFERENCES characters(id) ON DELETE SET NULL,
+    INDEX idx_code (code),
+    INDEX idx_inviter (inviter_character_id),
+    INDEX idx_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Team applications (player → team, GDD 2.9 组队机制)
