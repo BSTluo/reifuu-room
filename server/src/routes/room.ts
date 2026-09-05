@@ -3,6 +3,7 @@ import RoomService from '../services/RoomService.js';
 import CharacterService from '../services/CharacterService.js';
 import { authenticate } from '../middleware/auth.js';
 import { AppError } from '../middleware/errorHandler.js';
+import RoomMembershipService from '../services/RoomMembershipService.js';
 
 const router = Router();
 
@@ -26,8 +27,53 @@ function parseRoomId(raw: string | string[] | undefined): string {
   if (!/^\d+$/.test(roomId)) {
     throw new AppError('Invalid roomId', 400);
   }
+
   return roomId;
 }
+
+router.get('/:roomId/membership', async (req, res, next) => {
+  try {
+    const character = await requireCharacter(req);
+    const state = await RoomMembershipService.listState(parseRoomId(req.params.roomId), String(character.id));
+    res.json({ status: 'success', data: state });
+  } catch (error) { next(error); }
+});
+
+router.get('/invitations/pending', async (req, res, next) => {
+  try {
+    const character = await requireCharacter(req);
+    const invitations = await RoomMembershipService.listPendingInvitations(String(character.id));
+    res.json({ status: 'success', data: { invitations } });
+  } catch (error) { next(error); }
+});
+
+router.post('/:roomId/invitations', async (req, res, next) => {
+  try {
+    const character = await requireCharacter(req);
+    const target = String(req.body?.characterId ?? '');
+    if (!/^\d+$/.test(target)) throw new AppError('characterId is required', 400);
+    const invitation = await RoomMembershipService.invite(parseRoomId(req.params.roomId), String(character.id), target);
+    res.status(201).json({ status: 'success', data: { invitation } });
+  } catch (error) { next(error); }
+});
+
+router.post('/invitations/:invitationId/respond', async (req, res, next) => {
+  try {
+    const character = await requireCharacter(req);
+    const accept = req.body?.accept;
+    if (typeof accept !== 'boolean') throw new AppError('accept is required', 400);
+    await RoomMembershipService.respond(String(req.params.invitationId), String(character.id), accept);
+    res.json({ status: 'success', data: { accepted: accept } });
+  } catch (error) { next(error); }
+});
+
+router.delete('/:roomId/members/:characterId', async (req, res, next) => {
+  try {
+    const character = await requireCharacter(req);
+    await RoomMembershipService.remove(parseRoomId(req.params.roomId), String(character.id), String(req.params.characterId));
+    res.json({ status: 'success', data: { removed: true } });
+  } catch (error) { next(error); }
+});
 
 // Get furniture catalog (available furniture types)
 router.get('/furniture-catalog', (_req: Request, res: Response, next: NextFunction) => {
@@ -42,8 +88,9 @@ router.get('/furniture-catalog', (_req: Request, res: Response, next: NextFuncti
 // Get room furniture layout
 router.get('/:roomId/furniture', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await requireCharacter(req);
+    const character = await requireCharacter(req);
     const roomId = parseRoomId(req.params.roomId);
+    await RoomMembershipService.requireAccess(roomId, String(character.id));
     const furniture = await RoomService.getFurniture(roomId);
     res.json({ status: 'success', data: { furniture } });
   } catch (error) {

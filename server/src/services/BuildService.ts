@@ -120,6 +120,11 @@ export class BuildService {
       );
 
       const chatRoomId = result.insertId;
+      await query(
+        `INSERT INTO room_members (room_id, character_id, role, status)
+         VALUES (?, ?, 'owner', 'active')`,
+        [chatRoomId, characterId],
+      );
 
       logger.info(`Character ${characterId} built ${template} at chunk ${chunkId}`);
 

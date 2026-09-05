@@ -94,6 +94,8 @@ export interface ChatRoomDTO {
   template: string
   ownerId: string
   ownerNickname?: string
+  isPublic?: boolean
+  role?: 'owner' | 'member' | null
 }
 
 export interface ChatMessageDTO {
@@ -108,6 +110,25 @@ export interface ChatMessageDTO {
 export interface RoomMemberDTO {
   characterId: string
   nickname: string
+  role?: 'owner' | 'member'
+  status?: 'active' | 'removed'
+  joinedAt?: string
+}
+
+export interface RoomInvitationDTO {
+  id: number
+  roomId: string
+  fromCharacterId: string
+  fromNickname: string
+  createdAt: string
+  roomName?: string
+}
+
+export interface RoomMembershipStateDTO {
+  isPublic: boolean
+  role: 'owner' | 'member' | null
+  members: RoomMemberDTO[]
+  invitations: RoomInvitationDTO[]
 }
 
 // ---- House interior (furniture) DTOs ----

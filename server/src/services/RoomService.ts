@@ -2,6 +2,7 @@ import { query } from '../db/mysql.js';
 import logger from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { randomUUID } from 'crypto';
+import RoomMembershipService from './RoomMembershipService.js';
 
 /** 家具类型定义 */
 export interface FurnitureItem {
@@ -222,6 +223,8 @@ class RoomService {
       throw new AppError('Chat room not found', 404);
     }
     const ownerId = String(rooms[0].owner_id);
+    const access = await RoomMembershipService.requireAccess(roomId, characterId);
+    if (!access.role && access.isPublic === false) throw new AppError('Room membership required', 403);
 
     // 权限：非 memberPlaceable 家具仅房主可摆
     if (!entry.memberPlaceable && String(characterId) !== ownerId) {
@@ -266,6 +269,7 @@ class RoomService {
       throw new AppError('Chat room not found', 404);
     }
     const ownerId = String(rooms[0].owner_id);
+    await RoomMembershipService.requireAccess(roomId, characterId);
 
     const decorations = await this.readDecorations(roomId);
     const item = decorations.furniture.find((f) => f.id === furnitureId);
@@ -309,6 +313,7 @@ class RoomService {
       throw new AppError('Chat room not found', 404);
     }
     const ownerId = String(rooms[0].owner_id);
+    await RoomMembershipService.requireAccess(roomId, characterId);
 
     const decorations = await this.readDecorations(roomId);
     const idx = decorations.furniture.findIndex((f) => f.id === furnitureId);

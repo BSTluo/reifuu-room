@@ -4,6 +4,7 @@ import CharacterService from '../services/CharacterService.js';
 import { authenticate } from '../middleware/auth.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { query } from '../db/mysql.js';
+import RoomMembershipService from '../services/RoomMembershipService.js';
 
 const router = Router();
 
@@ -40,6 +41,7 @@ router.post('/:roomId/messages', async (req: Request, res: Response, next: NextF
       throw new AppError('content is required', 400);
     }
 
+    await RoomMembershipService.requireAccess(roomId, String(character.id));
     const message = await ChatMessageService.sendMessage(
       roomId,
       String(character.id),
@@ -63,6 +65,7 @@ router.get('/:roomId/messages', async (req: Request, res: Response, next: NextFu
       ? Math.min(Math.max(Math.floor(limitParam), 1), 100)
       : 100;
 
+    await RoomMembershipService.requireAccess(roomId, String(character.id));
     const messages = await ChatMessageService.getHistory(roomId, limit);
 
     res.json({ status: 'success', data: { roomId, messages } });
@@ -74,13 +77,15 @@ router.get('/:roomId/messages', async (req: Request, res: Response, next: NextFu
 // Get chat room details (name, owner, template) for entering a room
 router.get('/room/:roomId', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await requireCharacter(req);
+    const character = await requireCharacter(req);
     const roomId = parseRoomId(req.params.roomId);
 
     const rooms: any = await query(
-      `SELECT cr.id, cr.chunk_id, cr.name, cr.template, cr.owner_id, c.nickname as owner_nickname
+      `SELECT cr.id, cr.chunk_id, cr.name, cr.template, cr.owner_id, c.nickname as owner_nickname,
+              COALESCE(mc.is_public, 0) AS is_public
        FROM chat_rooms cr
        JOIN characters c ON c.id = cr.owner_id
+       LEFT JOIN map_chunks mc ON mc.chunk_id = cr.chunk_id
        WHERE cr.id = ?`,
       [roomId]
     );
@@ -90,6 +95,7 @@ router.get('/room/:roomId', async (req: Request, res: Response, next: NextFuncti
     }
 
     const room = rooms[0];
+    const access = await RoomMembershipService.requireAccess(roomId, String(character.id));
     res.json({
       status: 'success',
       data: {
@@ -100,6 +106,8 @@ router.get('/room/:roomId', async (req: Request, res: Response, next: NextFuncti
           template: room.template,
           ownerId: String(room.owner_id),
           ownerNickname: room.owner_nickname,
+          isPublic: Boolean(room.is_public),
+          role: access.role,
         },
       },
     });

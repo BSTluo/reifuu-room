@@ -97,6 +97,28 @@ function closePlugin() {
 }
 
 const availablePlugins = BUILTIN_PLUGINS
+const inviteCharacterId = ref('')
+const membershipMessage = ref('')
+
+async function invite() {
+  if (!inviteCharacterId.value.trim()) return
+  try {
+    await roomStore.inviteMember(inviteCharacterId.value.trim())
+    membershipMessage.value = '邀请已发送'
+    inviteCharacterId.value = ''
+  } catch (error: any) {
+    membershipMessage.value = error?.message ?? '邀请失败'
+  }
+}
+
+async function removeMember(characterId: string) {
+  try {
+    await roomStore.removeMember(characterId)
+    membershipMessage.value = '成员已移除'
+  } catch (error: any) {
+    membershipMessage.value = error?.message ?? '移除失败'
+  }
+}
 
 onMounted(() => {
   EventBus.on('room:history', onRoomHistory)
@@ -131,8 +153,24 @@ onBeforeUnmount(() => {
         :class="{ me: member.characterId === characterStore.characterId }"
       >
         {{ member.nickname }}
+        <button
+          v-if="roomStore.myRole === 'owner' && member.role !== 'owner' && member.characterId !== characterStore.characterId"
+          class="remove-member-btn"
+          title="移除成员"
+          @click.stop="removeMember(member.characterId)"
+        >×</button>
       </span>
       <span v-if="roomStore.members.length === 0" class="member-empty">成员加载中…</span>
+    </div>
+    <div v-if="roomStore.myRole === 'owner'" class="membership-controls">
+      <input v-model="inviteCharacterId" placeholder="角色 ID" @keydown.enter="invite" />
+      <button @click="invite">邀请成员</button>
+      <span>{{ membershipMessage }}</span>
+    </div>
+    <div v-for="invitation in roomStore.invitations" :key="invitation.id" class="room-invitation">
+      {{ invitation.fromNickname }} 邀请你加入房间
+      <button @click="roomStore.respondInvitation(invitation.id, true)">接受</button>
+      <button @click="roomStore.respondInvitation(invitation.id, false)">拒绝</button>
     </div>
 
     <!-- Plugin toolbar -->
@@ -244,6 +282,15 @@ onBeforeUnmount(() => {
 
 .member-chip.me {
   background: #486b52;
+}
+
+.remove-member-btn {
+  border: 0;
+  background: transparent;
+  color: #ffb0b0;
+  cursor: pointer;
+  margin-left: 3px;
+  padding: 0 2px;
 }
 
 .member-empty {

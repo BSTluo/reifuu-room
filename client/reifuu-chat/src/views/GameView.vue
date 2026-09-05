@@ -249,6 +249,15 @@ function handleMobileAction(action: string) {
   }
 }
 
+async function respondToRoomInvitation(invitationId: number, accept: boolean) {
+  try {
+    await roomStore.respondInvitation(invitationId, accept)
+    onToast({ message: accept ? '已加入房间' : '已拒绝邀请', type: 'success' })
+  } catch (error) {
+    onToast({ message: error instanceof ApiRequestError ? error.message : '处理房间邀请失败', type: 'error' })
+  }
+}
+
 onMounted(() => {
   EventBus.on('phaser:ready', onPhaserReady)
   EventBus.on('player:position-changed', onPositionChanged)
@@ -282,6 +291,7 @@ onMounted(() => {
 
   // 初始拉取背包
   refreshInventory()
+  roomStore.fetchPendingInvitations().catch(() => { /* panel can retry */ })
   vehicleStore.fetch().catch(() => { /* panel will retry when opened */ })
   vehicleStore.listen()
 })
@@ -366,7 +376,23 @@ onBeforeUnmount(() => {
           👥 团队
           <span v-if="teamStore.inTeam" class="team-badge">{{ teamStore.members.length }}</span>
         </button>
+        <button
+          class="action-btn"
+          :class="{ 'has-badge': roomStore.pendingInvitations.length > 0 }"
+          @click="roomStore.fetchPendingInvitations()"
+        >
+          🏠 房间邀请
+          <span v-if="roomStore.pendingInvitations.length > 0" class="mail-badge">{{ roomStore.pendingInvitations.length }}</span>
+        </button>
         <button class="action-btn" @click="showTownPortal = !showTownPortal">🌀 城镇传送</button>
+      </div>
+      <div v-if="roomStore.pendingInvitations.length > 0" class="panel room-invitations-panel">
+        <h3>房间邀请</h3>
+        <div v-for="invitation in roomStore.pendingInvitations" :key="invitation.id" class="room-invitation-row">
+          <span>{{ invitation.fromNickname }} 邀请你加入「{{ invitation.roomName ?? invitation.roomId }}」</span>
+          <button @click="respondToRoomInvitation(invitation.id, true)">接受</button>
+          <button @click="respondToRoomInvitation(invitation.id, false)">拒绝</button>
+        </div>
       </div>
 
       <div v-if="showInventory" class="panel">

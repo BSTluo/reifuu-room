@@ -17,6 +17,7 @@ import TeamService from './services/TeamService.js';
 import TownService from './services/TownService.js';
 import { calculateChunkLimit } from './services/TeamService.js';
 import { query } from './db/mysql.js';
+import RoomMembershipService from './services/RoomMembershipService.js';
 
 /**
  * In-memory map: characterId → Set<socketId>.
@@ -365,6 +366,7 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
         }
 
         const roomKey = `room:${roomId}`;
+        await RoomMembershipService.requireAccess(roomId, character.id);
         socket.join(roomKey);
         socket.data.currentRoomId = roomId;
 
@@ -413,6 +415,11 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       }
 
       try {
+        if ((socket.data as SocketData).currentRoomId !== roomId) {
+          socket.emit('error', { message: 'Must be in the room to send messages' });
+          return;
+        }
+        await RoomMembershipService.requireAccess(roomId, character.id);
         const message = await ChatMessageService.sendMessage(roomId, character.id, content);
         io.to(`room:${roomId}`).emit('room:message', { roomId, message });
       } catch (error: any) {
@@ -423,7 +430,7 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
 
     // ---- Plugin events ----
     // Activate a plugin in a room
-    socket.on('plugin:activate', (data: { roomId: string; pluginId: string }) => {
+    socket.on('plugin:activate', async (data: { roomId: string; pluginId: string }) => {
       if (!character) return;
       const roomId = String(data?.roomId ?? '');
       const pluginId = String(data?.pluginId ?? '');
@@ -440,6 +447,12 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
         socket.emit('error', { message: 'Must be in the room to activate plugins' });
         return;
       }
+      try {
+        await RoomMembershipService.requireAccess(roomId, character.id);
+      } catch (error: any) {
+        socket.emit('error', { message: error.message || 'Room membership required' });
+        return;
+      }
 
       const state = PluginService.activate(roomId, pluginId, character.id, {
         controllerId: character.id,
@@ -452,11 +465,17 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
     });
 
     // Deactivate a plugin in a room
-    socket.on('plugin:deactivate', (data: { roomId: string; pluginId: string }) => {
+    socket.on('plugin:deactivate', async (data: { roomId: string; pluginId: string }) => {
       if (!character) return;
       const roomId = String(data?.roomId ?? '');
       const pluginId = String(data?.pluginId ?? '');
       if (!/^\d+$/.test(roomId) || !pluginId) return;
+      try {
+        await RoomMembershipService.requireAccess(roomId, character.id);
+      } catch (error: any) {
+        socket.emit('error', { message: error.message || 'Room membership required' });
+        return;
+      }
 
       const existed = PluginService.deactivate(roomId, pluginId);
       if (existed) {
@@ -467,11 +486,17 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
     });
 
     // Sync plugin state (controller sends state update, server broadcasts)
-    socket.on('plugin:state-sync', (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => {
+    socket.on('plugin:state-sync', async (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => {
       if (!character) return;
       const roomId = String(data?.roomId ?? '');
       const pluginId = String(data?.pluginId ?? '');
       if (!/^\d+$/.test(roomId) || !pluginId || !data?.state) return;
+      try {
+        await RoomMembershipService.requireAccess(roomId, character.id);
+      } catch (error: any) {
+        socket.emit('error', { message: error.message || 'Room membership required' });
+        return;
+      }
 
       // Only the controller (activator) or room owner can send state updates
       const current = PluginService.getState(roomId, pluginId);
@@ -498,6 +523,7 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       const roomId = String(data?.roomId ?? '');
       if (!/^\d+$/.test(roomId)) return;
       try {
+        await RoomMembershipService.requireAccess(roomId, character.id);
         const { default: RoomService } = await import('./services/RoomService.js');
         const furniture = await RoomService.getFurniture(roomId);
         socket.emit('room:furniture', { roomId, furniture });
@@ -517,6 +543,7 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       const roomId = String(data?.roomId ?? '');
       const action = String(data?.action ?? '');
       if (!/^\d+$/.test(roomId) || !['placed', 'moved', 'removed'].includes(action)) return;
+      if ((socket.data as SocketData).currentRoomId !== roomId) return;
       const roomKey = `room:${roomId}`;
       io.to(roomKey).emit('room:furniture-changed', {
         roomId,

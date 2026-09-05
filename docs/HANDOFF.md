@@ -2,7 +2,7 @@
 
 > 本文件用于**当前团队 → 下一个团队**的工作交接。它记录项目当前真实状态、已完成/进行中/待办工作、团队结构、运行方式与已知问题。
 > 下一个团队接手时，请先通读本文件 + `docs/GDD.md`，再检查代码现状。
-> 最后更新：2026-09-05（交通工具系统 §6.13 追加）
+> 最后更新：2026-09-05（聊天室成员权限与邀请追加）
 
 ---
 
@@ -157,6 +157,13 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
   - `POST /chat/:roomId/messages`：`{ content }` → 返回完整消息行（含 nickname）。
   - `GET /chat/:roomId/messages`：历史消息。
   - `GET /chat/room/:roomId`：房间详情。
+
+### 6.2 聊天室成员权限（已完成）
+- `room_members` 保存 owner/member、active/removed 状态；`room_invitations` 保存待处理邀请，见 `server/src/db/migrations/004-room-memberships.sql`（同时已补充 `schema.sql`）。
+- 私有房间（区块 `is_public = FALSE`）只有 owner 或 active member 可进入、读取/发送聊天、读取/修改家具和使用插件；公开房间继续允许访客。
+- REST：`GET /room/:roomId/membership`、`POST /room/:roomId/invitations`（owner，`characterId`）、`POST /room/invitations/:invitationId/respond`（`accept`）、`GET /room/invitations/pending`、`DELETE /room/:roomId/members/:characterId`。
+- Socket `room:join`、`room:message`、插件与家具请求均执行成员授权。建房时 owner 自动写入成员表；接受邀请使用事务更新邀请并加入成员。
+- 前端 room store/GameView 全局“房间邀请”面板可在进入房间前拉取并接受/拒绝邀请；ChatPanel 展示成员、owner 邀请并支持移除成员。待接受邀请不会获得房间预览、加入或聊天权限。
 - socket 事件（`server/src/socket.ts`，用 Socket.io 房间 `room:<id>` 广播）：
   - `room:join`（C→S，`{ roomId }`）→ 加入者收 `room:history` + `room:members`，房间内其他人收更新后的 `room:members`。
   - `room:leave`（C→S，`{ roomId }`）→ 离开并广播更新后的成员列表。
@@ -447,7 +454,7 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 - ~~前端迷雾完全未做~~（**已解决**，§5.2 完成）。
 - 小地图、资源节点/建造/聊天室前端交互 UI（**已补齐**：`WorldScene` 资源节点渲染 + `GameView` 背包/建造面板）。
 - ~~好友系统~~（**已完成** §6.7）；高级交通工具系统仍未实现（GDD Phase 4.5）。
-- 聊天室成员角色（房主/成员/访客）目前仅有房主 vs 访客二分，邀请制与成员管理未实现（见 §6.2）。
+- 聊天室公开房间仍支持访客访问；私有房间使用 §6.2 的邀请制成员权限。
 - ~~飞鸽传信~~（**已完成** §6.8）：仅建表 → 现 service/routes/socket/UI 均已实现并验证通过。
 - 数据库 `192.168.12.1` 是内网地址，换环境/远程时需改 `.env`（曾有短暂不可达导致 500）。
 - **表结构迁移注意**：`schema.sql` 用 `CREATE TABLE IF NOT EXISTS`，不会 ALTER 已存在的表。若在旧库上跑 schema，`map_chunks` / `resource_nodes` / `inventory_items` / `chat_rooms` 等新列需手动迁移或删表重建（本次交接中 `map_chunks` 因缺 `chunk_id/chunk_type/owner_id/is_public` 列已重建）。
@@ -461,14 +468,12 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 2. ~~视野迷雾前端~~（**已完成** §5.2）。
 3. ~~复核现有 API 的前端对接~~（**已完成**：资源采集/建造/背包/聊天室均已端到端联通并 REST 验证通过）。
 4. ~~进入聊天室实际使用~~（**已完成** §6）：点击房屋标记 → 进入房间 → 实时文字聊天，前后端 + 浏览器 UI 均验证通过。
-5. ~~聊天室进阶功能~~（**音乐/视频同步播放已完成** §6.5、**房屋内部系统已完成** §6.10）：房间权限管理（成员角色/邀请制）、房间装饰系统待实现。
+5. ~~聊天室进阶功能~~（**音乐/视频同步播放已完成** §6.5、**房屋内部系统已完成** §6.10、**成员权限/邀请制已完成** §6.2）：房间装饰系统仍可继续扩展。
 6. ~~插件扩展~~（**已完成** §6.5、§6.10）：当前内建四个插件（`music-sync` / `video-sync` / `radio-fm` / `doudizhu`）已可用于房屋家具交互；新增插件只需：①在 `plugins.ts` 注册（id/name/icon/component）②在服务端 `socket.ts` 的 `allowedPlugins` 数组加 id ③编写插件 Vue 组件（props: `roomId`，emit: `close`）。
 7. ~~规划 Phase 3（好友/社交、传送门）~~（**好友系统已完成** §6.7，**飞鸽传信已完成** §6.8，**团队系统已完成** §6.9，**传送门系统已完成** §6.12）与 Phase 4（交通工具）。
 8. ~~移动端适配~~（**已完成** §6.11）：虚拟摇杆、响应式布局、触摸优化已全部实现，可接受移动设备测试。
 9. **后续功能**：
-   - 交通工具（Phase 4）：马车/骑马跨区块移动。
    - 高级交通工具（Phase 4.5）：船只、飞行器跨洲。
-   - 房间权限管理：邀请制成员、访客隔离。
    - 房间装饰/家具系统扩展：自定义贴图、动画。
 10. 建议为前端新增 UI/UX 专职成员补齐界面质感（该角色上一团队已移除）。
 11. 前端接入正式美术资源时替换 `PreloadScene` 的 Graphics 生成贴图（贴图 key 不变即可平滑替换）。
