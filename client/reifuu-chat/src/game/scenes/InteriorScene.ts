@@ -85,33 +85,58 @@ export class InteriorScene extends Phaser.Scene {
     this.characterStore = useCharacterStore()
 
     const template = this.roomStore?.template ?? 'wooden_house'
-    const floorColor = FLOOR_COLORS[template] ?? FLOOR_COLORS.wooden_house
 
-    // Draw floor
+    // Draw floor — 使用贴图平铺，缺失时回退纯色
     this.floorGraphics = this.add.graphics()
-    this.floorGraphics.fillStyle(floorColor, 1)
-    this.floorGraphics.fillRect(0, 0, ROOM_PX_W, ROOM_PX_H)
-    // Floor grid lines
-    this.floorGraphics.lineStyle(1, 0x000000, 0.1)
-    for (let i = 0; i <= ROOM_GRID_WIDTH; i++) {
-      this.floorGraphics.lineBetween(i * ITILE_W, 0, i * ITILE_W, ROOM_PX_H)
+    const floorKey = `floor-${template}`
+    if (this.textures.exists(floorKey)) {
+      // 贴图平铺
+      this.floorGraphics.setVisible(false)
+      for (let x = 0; x < ROOM_PX_W; x += ITILE_W) {
+        for (let y = 0; y < ROOM_PX_H; y += ITILE_H) {
+          this.add.image(x, y, floorKey).setOrigin(0, 0).setDepth(-100)
+        }
+      }
+    } else {
+      const floorColor = FLOOR_COLORS[template] ?? FLOOR_COLORS.wooden_house
+      this.floorGraphics.fillStyle(floorColor, 1)
+      this.floorGraphics.fillRect(0, 0, ROOM_PX_W, ROOM_PX_H)
+      // Floor grid lines
+      this.floorGraphics.lineStyle(1, 0x000000, 0.1)
+      for (let i = 0; i <= ROOM_GRID_WIDTH; i++) {
+        this.floorGraphics.lineBetween(i * ITILE_W, 0, i * ITILE_W, ROOM_PX_H)
+      }
+      for (let j = 0; j <= ROOM_GRID_HEIGHT; j++) {
+        this.floorGraphics.lineBetween(0, j * ITILE_H, ROOM_PX_W, j * ITILE_H)
+      }
+      this.floorGraphics.setDepth(-100)
     }
-    for (let j = 0; j <= ROOM_GRID_HEIGHT; j++) {
-      this.floorGraphics.lineBetween(0, j * ITILE_H, ROOM_PX_W, j * ITILE_H)
-    }
-    this.floorGraphics.setDepth(-100)
 
-    // Draw walls (top + left, 2.5D perspective illusion)
+    // Draw walls (top + left, 2.5D perspective illusion) — 使用贴图，缺失时回退纯色
     this.wallGraphics = this.add.graphics()
-    this.wallGraphics.fillStyle(WALL_COLOR, 0.8)
-    // Top wall
-    this.wallGraphics.fillRect(0, -WALL_HEIGHT, ROOM_PX_W, WALL_HEIGHT)
-    // Left wall
-    this.wallGraphics.fillRect(-WALL_HEIGHT, 0, WALL_HEIGHT, ROOM_PX_H)
-    this.wallGraphics.lineStyle(2, 0x3e2723, 1)
-    this.wallGraphics.strokeRect(0, -WALL_HEIGHT, ROOM_PX_W, WALL_HEIGHT)
-    this.wallGraphics.strokeRect(-WALL_HEIGHT, 0, WALL_HEIGHT, ROOM_PX_H)
-    this.wallGraphics.setDepth(-99)
+    const wallTopKey = 'wall-top'
+    const wallLeftKey = 'wall-left'
+    if (this.textures.exists(wallTopKey) && this.textures.exists(wallLeftKey)) {
+      this.wallGraphics.setVisible(false)
+      // Top wall — 贴图平铺
+      for (let x = 0; x < ROOM_PX_W; x += ITILE_W) {
+        this.add.image(x, -WALL_HEIGHT, wallTopKey).setOrigin(0, 0).setDepth(-99)
+      }
+      // Left wall — 贴图平铺
+      for (let y = 0; y < ROOM_PX_H; y += ITILE_H) {
+        this.add.image(-WALL_HEIGHT, y, wallLeftKey).setOrigin(0, 0).setDepth(-99)
+      }
+    } else {
+      this.wallGraphics.fillStyle(WALL_COLOR, 0.8)
+      // Top wall
+      this.wallGraphics.fillRect(0, -WALL_HEIGHT, ROOM_PX_W, WALL_HEIGHT)
+      // Left wall
+      this.wallGraphics.fillRect(-WALL_HEIGHT, 0, WALL_HEIGHT, ROOM_PX_H)
+      this.wallGraphics.lineStyle(2, 0x3e2723, 1)
+      this.wallGraphics.strokeRect(0, -WALL_HEIGHT, ROOM_PX_W, WALL_HEIGHT)
+      this.wallGraphics.strokeRect(-WALL_HEIGHT, 0, WALL_HEIGHT, ROOM_PX_H)
+      this.wallGraphics.setDepth(-99)
+    }
 
     // Furniture layer graphics (for placement preview grid)
     this.furnitureGraphics = this.add.graphics()
@@ -379,34 +404,43 @@ export class InteriorScene extends Phaser.Scene {
     const px = item.x * ITILE_W + (visual.w * ITILE_W) / 2
     const py = item.y * ITILE_H + (visual.h * ITILE_H) / 2
 
-    const g = this.add.graphics()
-    // Shadow
-    g.fillStyle(0x000000, 0.2)
-    g.fillEllipse(0, visual.h * ITILE_H / 2 - 4, visual.w * ITILE_W * 0.8, 12)
-    // Body
-    g.fillStyle(visual.color, 1)
-    g.fillRoundedRect(
-      -visual.w * ITILE_W / 2 + 4,
-      -visual.h * ITILE_H / 2 + 4,
-      visual.w * ITILE_W - 8,
-      visual.h * ITILE_H - 8,
-      6,
-    )
-    // Highlight
-    g.fillStyle(0xffffff, 0.2)
-    g.fillRoundedRect(
-      -visual.w * ITILE_W / 2 + 6,
-      -visual.h * ITILE_H / 2 + 6,
-      visual.w * ITILE_W - 16,
-      4,
-      2,
-    )
+    const texKey = `furniture-${item.type}`
+    let container: Phaser.GameObjects.Container
+    if (this.textures.exists(texKey)) {
+      // AI/预生成家具贴图
+      const img = this.add.image(0, 0, texKey).setOrigin(0.5, 0.85)
+      container = this.add.container(px, py, [img])
+    } else {
+      // Graphics 占位图
+      const g = this.add.graphics()
+      // Shadow
+      g.fillStyle(0x000000, 0.2)
+      g.fillEllipse(0, visual.h * ITILE_H / 2 - 4, visual.w * ITILE_W * 0.8, 12)
+      // Body
+      g.fillStyle(visual.color, 1)
+      g.fillRoundedRect(
+        -visual.w * ITILE_W / 2 + 4,
+        -visual.h * ITILE_H / 2 + 4,
+        visual.w * ITILE_W - 8,
+        visual.h * ITILE_H - 8,
+        6,
+      )
+      // Highlight
+      g.fillStyle(0xffffff, 0.2)
+      g.fillRoundedRect(
+        -visual.w * ITILE_W / 2 + 6,
+        -visual.h * ITILE_H / 2 + 6,
+        visual.w * ITILE_W - 16,
+        4,
+        2,
+      )
 
-    const label = this.add.text(0, 0, visual.icon, {
-      fontSize: '20px',
-    }).setOrigin(0.5, 0.5)
+      const label = this.add.text(0, 0, visual.icon, {
+        fontSize: '20px',
+      }).setOrigin(0.5, 0.5)
 
-    const container = this.add.container(px, py, [g, label])
+      container = this.add.container(px, py, [g, label])
+    }
     container.setDepth(py + 1)
     container.setSize(visual.w * ITILE_W, visual.h * ITILE_H)
 

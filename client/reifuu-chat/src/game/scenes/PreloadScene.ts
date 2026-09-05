@@ -21,10 +21,97 @@ const RESOURCE_COLORS: Record<string, number> = {
   coral: 0xff6b9d,
   deep_mineral: 0x7e57c2,
 }
+
+/** 室内地板色板（与 InteriorScene FLOOR_COLORS 对应） */
+const FLOOR_COLORS: Record<string, number> = {
+  wooden_house: 0x8b6e4a,
+  stone_house: 0x9e9e8e,
+  advanced_house: 0x7e57c2,
+}
+
+/** 室内墙色板 */
+const WALL_COLOR = 0x5d4037
+
+/** 家具占位色板（与 InteriorScene FURNITURE_VISUALS 对应） */
+const FURNITURE_VISUALS: Record<string, { color: number; w: number; h: number; icon: string }> = {
+  card_table: { color: 0x2e7d32, w: 2, h: 2, icon: '🃏' },
+  radio: { color: 0x42a5f5, w: 1, h: 1, icon: '📻' },
+  jukebox: { color: 0xab47bc, w: 1, h: 1, icon: '🎵' },
+  projector: { color: 0xff7043, w: 2, h: 1, icon: '🎬' },
+  sofa: { color: 0xef5350, w: 2, h: 1, icon: '🛋️' },
+  table: { color: 0x8d6e63, w: 1, h: 1, icon: '🪑' },
+  plant: { color: 0x66bb6a, w: 1, h: 1, icon: '🪴' },
+  bookshelf: { color: 0x6d4c41, w: 1, h: 2, icon: '📚' },
+  bed: { color: 0xec407a, w: 2, h: 1, icon: '🛏️' },
+  lamp: { color: 0xffca28, w: 1, h: 1, icon: '💡' },
+}
+
 /**
- * 资源加载骨架：Phase 1 阶段用 Graphics 生成临时的等距 tile 与角色占位贴图，
- * 后续接入正式美术资源（Tiled Tilemap / sprite sheet）时替换本文件内容即可，
- * 下游（WorldScene/PlayerSprite）只依赖贴图 key，不受影响。
+ * AI 生成贴图清单：key 与 Graphics 占位图完全一致，加载成功后下游
+ * （WorldScene/InteriorScene/PlayerSprite）无感知切换。
+ * 文件位于 public/assets/sprites/，由 scripts/generate-sprites.ts 生成。
+ */
+const SPRITE_FILES: Record<string, string> = {
+  // 地形 tile（48×48）
+  'tile-grass-0': 'tile-grass-0.png',
+  'tile-grass-1': 'tile-grass-1.png',
+  'tile-grass-2': 'tile-grass-2.png',
+  'tile-dirt-0': 'tile-dirt-0.png',
+  'tile-dirt-1': 'tile-dirt-1.png',
+  'tile-dirt-2': 'tile-dirt-2.png',
+  'tile-water-0': 'tile-water-0.png',
+  'tile-water-1': 'tile-water-1.png',
+  'tile-water-2': 'tile-water-2.png',
+  'tile-sand-0': 'tile-sand-0.png',
+  'tile-sand-1': 'tile-sand-1.png',
+  'tile-sand-2': 'tile-sand-2.png',
+  // 水面动画帧（48×48）
+  'water-anim-0': 'water-anim-0.png',
+  'water-anim-1': 'water-anim-1.png',
+  'water-anim-2': 'water-anim-2.png',
+  'water-anim-3': 'water-anim-3.png',
+  // 玩家（32×48）
+  'player-placeholder': 'player-placeholder.png',
+  // 资源节点（24×28）
+  'resource-wood': 'resource-wood.png',
+  'resource-stone': 'resource-stone.png',
+  'resource-mineral': 'resource-mineral.png',
+  'resource-coral': 'resource-coral.png',
+  'resource-deep_mineral': 'resource-deep_mineral.png',
+  'resource-wood-depleted': 'resource-wood-depleted.png',
+  'resource-stone-depleted': 'resource-stone-depleted.png',
+  'resource-mineral-depleted': 'resource-mineral-depleted.png',
+  'resource-coral-depleted': 'resource-coral-depleted.png',
+  'resource-deep_mineral-depleted': 'resource-deep_mineral-depleted.png',
+  // 房屋建筑（48×56）
+  'house-wooden_house': 'house-wooden_house.png',
+  'house-stone_house': 'house-stone_house.png',
+  'house-advanced_house': 'house-advanced_house.png',
+  'house-island_hut': 'house-island_hut.png',
+  // 室内地板（48×48）
+  'floor-wooden_house': 'floor-wooden_house.png',
+  'floor-stone_house': 'floor-stone_house.png',
+  'floor-advanced_house': 'floor-advanced_house.png',
+  // 室内墙（48×24 / 24×48）
+  'wall-top': 'wall-top.png',
+  'wall-left': 'wall-left.png',
+  // 家具
+  'furniture-card_table': 'furniture-card_table.png',
+  'furniture-radio': 'furniture-radio.png',
+  'furniture-jukebox': 'furniture-jukebox.png',
+  'furniture-projector': 'furniture-projector.png',
+  'furniture-sofa': 'furniture-sofa.png',
+  'furniture-table': 'furniture-table.png',
+  'furniture-plant': 'furniture-plant.png',
+  'furniture-bookshelf': 'furniture-bookshelf.png',
+  'furniture-bed': 'furniture-bed.png',
+  'furniture-lamp': 'furniture-lamp.png',
+}
+
+/**
+ * 资源加载：优先从 assets/sprites/ 加载 AI 生成的 PNG 贴图，
+ * 缺失的贴图在 create() 中由 Graphics 占位图补齐。
+ * 下游（WorldScene/InteriorScene/PlayerSprite）只依赖贴图 key，不受影响。
  */
 export class PreloadScene extends Phaser.Scene {
   constructor() {
@@ -32,15 +119,21 @@ export class PreloadScene extends Phaser.Scene {
   }
 
   preload(): void {
+    // 将所有 AI 贴图加入加载队列
+    for (const [key, file] of Object.entries(SPRITE_FILES)) {
+      this.load.image(key, `assets/sprites/${file}`)
+    }
+  }
+
+  create(): void {
+    // 为加载失败的贴图生成 Graphics 占位图
     this.generateTileTextures()
     this.generateEdgeTextures()
     this.generateWaterAnimTextures()
     this.generatePlayerTexture()
     this.generateResourceTextures()
     this.generateHouseTextures()
-  }
-
-  create(): void {
+    this.generateInteriorTextures()
     this.scene.start('WorldScene')
   }
 
@@ -248,6 +341,68 @@ export class PreloadScene extends Phaser.Scene {
       g.fillRoundedRect(width - 20, 28, 8, 8, 1)
 
       g.generateTexture(key, width, height)
+      g.destroy()
+    }
+  }
+
+  /** 生成室内地板/墙/家具的 Graphics 占位贴图（AI 贴图缺失时兜底） */
+  private generateInteriorTextures(): void {
+    // ---- 地板（48×48，对应 InteriorScene FLOOR_COLORS） ----
+    for (const [template, color] of Object.entries(FLOOR_COLORS)) {
+      const key = `floor-${template}`
+      if (this.textures.exists(key)) continue
+
+      const g = this.add.graphics()
+      g.fillStyle(color, 1)
+      g.fillRect(0, 0, TILE_WIDTH, TILE_HEIGHT)
+      // 木纹/石纹噪点
+      const random = createSeededRandom(hashStringToSeed(`floor_${template}`))
+      for (let i = 0; i < 8; i++) {
+        g.fillStyle(0x000000, 0.06)
+        g.fillRect(Math.floor(random() * (TILE_WIDTH - 8)), Math.floor(random() * (TILE_HEIGHT - 4)), 6, 2)
+      }
+      g.generateTexture(key, TILE_WIDTH, TILE_HEIGHT)
+      g.destroy()
+    }
+
+    // ---- 墙（上墙 48×24，左墙 24×48） ----
+    if (!this.textures.exists('wall-top')) {
+      const g = this.add.graphics()
+      g.fillStyle(WALL_COLOR, 0.8)
+      g.fillRect(0, 0, TILE_WIDTH, 24)
+      g.lineStyle(2, 0x3e2723, 1)
+      g.strokeRect(0, 0, TILE_WIDTH, 24)
+      g.generateTexture('wall-top', TILE_WIDTH, 24)
+      g.destroy()
+    }
+    if (!this.textures.exists('wall-left')) {
+      const g = this.add.graphics()
+      g.fillStyle(WALL_COLOR, 0.8)
+      g.fillRect(0, 0, 24, TILE_HEIGHT)
+      g.lineStyle(2, 0x3e2723, 1)
+      g.strokeRect(0, 0, 24, TILE_HEIGHT)
+      g.generateTexture('wall-left', 24, TILE_HEIGHT)
+      g.destroy()
+    }
+
+    // ---- 家具（按 FURNITURE_VISUALS 尺寸生成，w/h 为 tile 数） ----
+    for (const [type, visual] of Object.entries(FURNITURE_VISUALS)) {
+      const key = `furniture-${type}`
+      if (this.textures.exists(key)) continue
+
+      const w = visual.w * TILE_WIDTH
+      const h = visual.h * TILE_HEIGHT
+      const g = this.add.graphics()
+      // 影子
+      g.fillStyle(0x000000, 0.2)
+      g.fillEllipse(w / 2, h - 4, w * 0.8, 12)
+      // 主体
+      g.fillStyle(visual.color, 1)
+      g.fillRoundedRect(4, 4, w - 8, h - 8, 6)
+      // 高光
+      g.fillStyle(0xffffff, 0.2)
+      g.fillRoundedRect(6, 6, w - 16, 4, 2)
+      g.generateTexture(key, w, h)
       g.destroy()
     }
   }
