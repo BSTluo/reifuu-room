@@ -727,6 +727,9 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+    </Transition>
+
+    <Transition name="slide-up">
       <div v-if="isMobile && showInviteCode" class="mobile-panel-overlay">
         <div class="mobile-panel">
           <div class="mobile-panel-header">
@@ -738,6 +741,9 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+    </Transition>
+
+    <Transition name="slide-up">
       <div v-if="isMobile && showPassenger" class="mobile-panel-overlay">
         <div class="mobile-panel">
           <div class="mobile-panel-header">
