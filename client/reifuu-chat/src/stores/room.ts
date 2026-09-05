@@ -120,6 +120,10 @@ export const useRoomStore = defineStore('room', {
       if (payload.roomId !== this.roomId) return
       this.members = payload.members
     },
+    handleMemberRemoved(payload: { roomId: string }) {
+      if (payload.roomId !== this.roomId) return
+      this.leaveRoom()
+    },
     sendMessage(content: string) {
       if (!this.roomId) return
       const trimmed = content.trim()
@@ -152,7 +156,10 @@ export const useRoomStore = defineStore('room', {
       if (this.roomId) await apiDelete(`/room/${this.roomId}/members/${characterId}`, token)
       this.members = this.members.filter((member) => member.characterId !== characterId)
       if (this.roomId) {
-        socketClient.instance?.emit('room:membership-refresh', { roomId: this.roomId })
+        socketClient.instance?.emit('room:membership-refresh', {
+          roomId: this.roomId,
+          removedCharacterId: characterId,
+        })
       }
     },
   },

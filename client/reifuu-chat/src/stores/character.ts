@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { apiGet, apiPost, ApiRequestError } from '../api/http'
-import type { CharacterAppearanceDTO, CharacterDTO, Continent } from '../api/types'
+import type { CharacterAppearanceDTO, CharacterDTO, Continent, SpawnMethod } from '../api/types'
 import { useUserStore } from './user'
 
 interface CharacterState {
@@ -68,9 +68,13 @@ export const useCharacterStore = defineStore('character', {
       nickname: string
       appearance: CharacterAppearanceDTO
       startContinent: Continent
+      spawnMethod?: SpawnMethod
     }): Promise<void> {
       const userStore = useUserStore()
-      const dto = await apiPost<CharacterDTO>('/character/create', payload, userStore.accessToken ?? undefined)
+      const dto = await apiPost<CharacterDTO>('/character/create', {
+        ...payload,
+        spawnMethod: payload.spawnMethod ?? 'unowned',
+      }, userStore.accessToken ?? undefined)
       this.applyCharacter(dto)
     },
     setPosition(x: number, y: number) {

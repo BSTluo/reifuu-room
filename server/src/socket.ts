@@ -37,6 +37,14 @@ function getSocketForCharacter(io: SocketIOServer, characterId: string): Socket 
   return null;
 }
 
+function getSocketsForCharacter(io: SocketIOServer, characterId: string): Socket[] {
+  const socketIds = characterSocketMap.get(characterId);
+  if (!socketIds) return [];
+  return Array.from(socketIds)
+    .map((socketId) => io.sockets.sockets.get(socketId))
+    .filter((socket): socket is Socket => Boolean(socket));
+}
+
 /**
  * Build the full team state payload for a character (mirrors GET /team/info).
  * Returns null if the character is not in a team.
@@ -401,12 +409,26 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       logger.info(`${character?.nickname ?? 'unknown'} left chat room ${roomId}`);
     });
 
-    socket.on('room:membership-refresh', async (data: { roomId: string }) => {
+    socket.on('room:membership-refresh', async (data: { roomId: string; removedCharacterId?: string }) => {
       if (!character) return;
       const roomId = String(data?.roomId ?? '');
       if (!/^\d+$/.test(roomId)) return;
       try {
         await RoomMembershipService.requireAccess(roomId, character.id);
+        if (data.removedCharacterId) {
+          await RoomMembershipService.requireOwner(roomId, character.id);
+          const isRemoved = await RoomMembershipService.isRemoved(roomId, String(data.removedCharacterId));
+          if (!isRemoved) {
+            throw new Error('Member removal has not been persisted');
+          }
+          const removedSockets = getSocketsForCharacter(io, String(data.removedCharacterId));
+          for (const removedSocket of removedSockets) {
+            if ((removedSocket.data as SocketData).currentRoomId !== roomId) continue;
+            removedSocket.emit('room:member-removed', { roomId });
+            removedSocket.leave(`room:${roomId}`);
+            delete (removedSocket.data as SocketData).currentRoomId;
+          }
+        }
         const members = await getRoomMembers(io, `room:${roomId}`);
         io.to(`room:${roomId}`).emit('room:members', { roomId, members });
       } catch (error: any) {

@@ -25,6 +25,7 @@ export interface ServerToClientEvents {
   'room:history': (data: { roomId: string; messages: Array<{ id: number; roomId: string; characterId: string; nickname: string; content: string; createdAt: string }> }) => void
   'room:message': (data: { roomId: string; message: { id: number; roomId: string; characterId: string; nickname: string; content: string; createdAt: string } }) => void
   'room:members': (data: { roomId: string; members: Array<{ characterId: string; nickname: string }> }) => void
+  'room:member-removed': (data: { roomId: string }) => void
   // Plugin events (server -> client)
   'plugin:activated': (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => void
   'plugin:deactivated': (data: { roomId: string; pluginId: string }) => void
@@ -69,7 +70,7 @@ export interface ClientToServerEvents {
   'room:join': (data: { roomId: string }) => void
   'room:leave': (data: { roomId: string }) => void
   'room:message': (data: { roomId: string; content: string }) => void
-  'room:membership-refresh': (data: { roomId: string }) => void
+  'room:membership-refresh': (data: { roomId: string; removedCharacterId?: string }) => void
   // Plugin events (client -> server)
   'plugin:activate': (data: { roomId: string; pluginId: string }) => void
   'plugin:deactivate': (data: { roomId: string; pluginId: string }) => void
@@ -179,6 +180,9 @@ class SocketClient {
     })
     this.socket.on('room:members', (data: { roomId: string; members: Array<{ characterId: string; nickname: string }> }) => {
       EventBus.emit('room:members', data)
+    })
+    this.socket.on('room:member-removed', (data: { roomId: string }) => {
+      EventBus.emit('room:member-removed', data)
     })
 
     // Plugin events: activated, deactivated, state sync, plugin list

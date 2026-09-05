@@ -23,6 +23,7 @@ export interface RefreshResponse {
 }
 
 export type Continent = 'east' | 'south' | 'west' | 'north'
+export type SpawnMethod = 'unowned' | 'public'
 
 export interface CharacterAppearanceDTO {
   gender: string
@@ -36,6 +37,7 @@ export interface CharacterDTO {
   nickname: string
   appearance: CharacterAppearanceDTO
   continent: Continent
+  spawnMethod: SpawnMethod
   currentChunkId: string
   position: { x: number; y: number }
   equippedVehicle?: VehicleDTO | null

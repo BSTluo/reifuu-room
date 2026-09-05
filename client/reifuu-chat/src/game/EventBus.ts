@@ -66,6 +66,8 @@ export type GameEvents = {
   'room:message': { roomId: string; message: { id: number; roomId: string; characterId: string; nickname: string; content: string; createdAt: string } }
   /** 房间成员列表更新 */
   'room:members': { roomId: string; members: Array<{ characterId: string; nickname: string }> }
+  /** 私有房间成员被移除后，客户端必须立即退出房间 */
+  'room:member-removed': { roomId: string }
   /** UI 请求进入聊天室 */
   'ui:enter-room': { roomId: string }
   /** UI 请求离开聊天室 */

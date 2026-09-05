@@ -3,7 +3,7 @@ import { computed, reactive, ref } from 'vue'
 import { ApiRequestError } from '../api/http'
 import { useCharacterStore } from '../stores/character'
 import { useUserStore } from '../stores/user'
-import type { Continent } from '../api/types'
+import type { Continent, SpawnMethod } from '../api/types'
 
 const emit = defineEmits<{ 'character-created': [] }>()
 
@@ -52,6 +52,11 @@ const appearance = reactive({
 })
 
 const startContinent = ref<Continent>('east')
+const spawnMethod = ref<SpawnMethod>('unowned')
+const SPAWN_METHODS: { value: SpawnMethod; label: string; description: string }[] = [
+  { value: 'unowned', label: '随机无主地块', description: '独享未被占领的空地' },
+  { value: 'public', label: '随机公开地块', description: '加入其他玩家公开的地块' },
+]
 
 const previewText = computed(() => {
   const genderLabel = GENDERS.find((g) => g.value === appearance.gender)?.label
@@ -76,6 +81,7 @@ async function handleCreate() {
       nickname: nickname.value.trim(),
       appearance: { ...appearance },
       startContinent: startContinent.value,
+      spawnMethod: spawnMethod.value,
     })
     emit('character-created')
   } catch (error) {
@@ -186,6 +192,23 @@ function handleLogout() {
             <span class="continent-name" :style="{ color: continent.color }">{{ continent.name }}</span>
             <span class="continent-theme">{{ continent.theme }}</span>
             <span class="continent-desc">{{ continent.description }}</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="section">
+        <label class="section-label">出生方式</label>
+        <div class="option-row">
+          <button
+            v-for="method in SPAWN_METHODS"
+            :key="method.value"
+            type="button"
+            class="spawn-method-button"
+            :class="{ active: spawnMethod === method.value }"
+            @click="spawnMethod = method.value"
+          >
+            <span>{{ method.label }}</span>
+            <small>{{ method.description }}</small>
           </button>
         </div>
       </div>
@@ -303,6 +326,32 @@ function handleLogout() {
   background: #ffb300;
   color: #2c1810;
   border-color: #ffb300;
+}
+
+.spawn-method-button {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: #6d4c41;
+  color: #f5e6d3;
+  border: 2px solid #2c1810;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+}
+
+.spawn-method-button.active {
+  background: #ffb300;
+  color: #2c1810;
+  border-color: #ffb300;
+}
+
+.spawn-method-button small {
+  font-size: 11px;
+  opacity: 0.8;
 }
 
 .continent-grid {

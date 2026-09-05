@@ -2,7 +2,7 @@
 
 > 本文件用于**当前团队 → 下一个团队**的工作交接。它记录项目当前真实状态、已完成/进行中/待办工作、团队结构、运行方式与已知问题。
 > 下一个团队接手时，请先通读本文件 + `docs/GDD.md`，再检查代码现状。
-> 最后更新：2026-09-05（聊天室成员权限与邀请追加）
+> 最后更新：2026-09-05（出生方式与出生点分配追加）
 
 ---
 
@@ -66,8 +66,9 @@ npm run dev        # Vite，端口 5173
 
 ### 4.1 登录 / 注册 / 角色创建
 - 认证：JWT（access + refresh），`server/src/routes/auth.ts`、`server/src/services/AuthService.ts`、`server/src/middleware/auth.ts`。
-- 角色：`GET /character/me`（存在性检查，带 Redis 缓存）、`POST /character/create`（一人一角色，昵称唯一，出生点写**世界坐标**）。
-- 坐标系约定：每区块 32x32 格，`世界坐标 = chunkX*32 + gridX`。出生点均在区块 `10_10` 的 (325, 325)。
+- 角色：`GET /character/me`（存在性检查，带 Redis 缓存）、`POST /character/create`（一人一角色，昵称唯一，出生点写**世界坐标**）。创角支持 `spawnMethod`：`unowned`（默认，随机无主空地/资源区块）或 `public`（随机公开玩家区块）；没有候选时回退到对应大洲的 `10_10`。
+- 出生候选在事务中锁定；无主候选创建后会标记 `map_chunks.owner_id`，降低并发重复分配。数据库变更见 `server/src/db/migrations/005-character-spawn-method.sql`，全新安装请使用 `schema.sql`。
+- 坐标系约定：每区块 32x32 格，`世界坐标 = chunkX*32 + gridX`。无候选时回退到各大洲区块 `10_10` 的 (325, 325)。
 - 前端：`AuthView.vue`、`CharacterCreateView.vue`、`stores/user.ts`、`stores/character.ts`、`App.vue`。
 
 ### 4.2 多人位置同步（已完成）
@@ -164,11 +165,12 @@ curl -H "Authorization: Bearer <token>" http://localhost:3000/map/explored
 - REST：`GET /room/:roomId/membership`、`POST /room/:roomId/invitations`（owner，`characterId`）、`POST /room/invitations/:invitationId/respond`（`accept`）、`GET /room/invitations/pending`、`DELETE /room/:roomId/members/:characterId`。
 - Socket `room:join`、`room:message`、插件与家具请求均执行成员授权。建房时 owner 自动写入成员表；接受邀请使用事务更新邀请并加入成员。
 - 前端 room store/GameView 全局“房间邀请”面板可在进入房间前拉取并接受/拒绝邀请；ChatPanel 展示成员、owner 邀请并支持移除成员。待接受邀请不会获得房间预览、加入或聊天权限。
-- 成员接受邀请或被房主移除后，客户端可通过 `room:membership-refresh` 触发在线成员列表广播，避免必须重新进入房间才能看到变更。
+- 成员接受邀请或被房主移除后，客户端可通过 `room:membership-refresh` 触发在线成员列表广播；被移除成员会收到 `room:member-removed`，服务端立即将其 Socket 移出房间，客户端清理状态并关闭聊天室。
 - socket 事件（`server/src/socket.ts`，用 Socket.io 房间 `room:<id>` 广播）：
   - `room:join`（C→S，`{ roomId }`）→ 加入者收 `room:history` + `room:members`，房间内其他人收更新后的 `room:members`。
   - `room:leave`（C→S，`{ roomId }`）→ 离开并广播更新后的成员列表。
   - `room:message`（C→S，`{ roomId, content }`）→ 持久化后向房间广播 `room:message`。
+  - `room:membership-refresh`（C→S，`{ roomId, removedCharacterId? }`）→ 刷新成员列表；移除成员时验证数据库状态后主动通知并踢出目标连接。
   - 断线时自动清理 `currentRoomId` 并刷新成员列表。
 
 ### 6.2 前端（✅ 已完成）

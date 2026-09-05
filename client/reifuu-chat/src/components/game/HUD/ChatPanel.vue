@@ -39,6 +39,10 @@ function onRoomMembers(payload: { roomId: string; members: any[] }) {
   roomStore.applyMembers(payload)
 }
 
+function onRoomMemberRemoved(payload: { roomId: string }) {
+  roomStore.handleMemberRemoved(payload)
+}
+
 function scrollToBottom() {
   nextTick(() => {
     if (messagesEl.value) {
@@ -124,6 +128,7 @@ onMounted(() => {
   EventBus.on('room:history', onRoomHistory)
   EventBus.on('room:message', onRoomMessage)
   EventBus.on('room:members', onRoomMembers)
+  EventBus.on('room:member-removed', onRoomMemberRemoved)
   pluginStore.init()
 })
 
@@ -131,6 +136,7 @@ onBeforeUnmount(() => {
   EventBus.off('room:history', onRoomHistory)
   EventBus.off('room:message', onRoomMessage)
   EventBus.off('room:members', onRoomMembers)
+  EventBus.off('room:member-removed', onRoomMemberRemoved)
   pluginStore.dispose()
 })
 </script>

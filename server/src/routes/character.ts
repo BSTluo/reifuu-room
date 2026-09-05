@@ -11,7 +11,7 @@ router.use(authenticate);
 // Create character
 router.post('/create', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { nickname, appearance, startContinent } = req.body;
+    const { nickname, appearance, startContinent, spawnMethod } = req.body;
     const userId = req.user?.userId;
 
     if (!userId) {
@@ -32,7 +32,8 @@ router.post('/create', async (req: Request, res: Response, next: NextFunction) =
       userId,
       nickname,
       appearance,
-      startContinent
+      startContinent,
+      spawnMethod
     );
 
     res.status(201).json({ status: 'success', data: character });

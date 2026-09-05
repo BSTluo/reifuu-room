@@ -156,6 +156,14 @@ class RoomMembershipService {
     );
     if (result.affectedRows === 0) throw new AppError('Member not found', 404);
   }
+
+  async isRemoved(roomId: string, characterId: string): Promise<boolean> {
+    const rows: any = await query(
+      'SELECT status FROM room_members WHERE room_id = ? AND character_id = ? LIMIT 1',
+      [roomId, characterId],
+    );
+    return rows.length > 0 && rows[0].status === 'removed';
+  }
 }
 
 export default new RoomMembershipService();
