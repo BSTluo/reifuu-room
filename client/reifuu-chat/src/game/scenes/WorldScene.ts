@@ -262,12 +262,14 @@ export class WorldScene extends Phaser.Scene {
         const type = terrain[ly][lx]
 
         // 确定性选择变体：基于 tile 世界坐标哈希
-        const tileHash = hashStringToSeed(`${wx}_${wy}`) ^ chunkSeed
+        // 注意：^ 返回有符号 32 位整数（可能为负），须用 >>> 0 转回无符号再取模
+        const tileHash = (hashStringToSeed(`${wx}_${wy}`) ^ chunkSeed) >>> 0
         const variant = tileHash % TILE_VARIANT_COUNT
         const baseIndex = layer.blitterIndex.get(type)
         if (baseIndex === undefined) continue
 
         const blitter = layer.blitters[baseIndex + variant]
+        if (!blitter) continue
         // Bob 使用左上角原点，tile 绘制区域左上角 = 中心 - (TILE_WIDTH/2, TILE_HEIGHT/2)
         blitter.create(center.x - TILE_WIDTH / 2, center.y - TILE_HEIGHT / 2)
 
