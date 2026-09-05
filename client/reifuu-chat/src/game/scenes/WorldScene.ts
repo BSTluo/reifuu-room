@@ -31,11 +31,33 @@ const FOG_EXPLORED_ALPHA = 0.75
 /** 无出生点时的默认世界坐标（大陆中心附近） */
 const DEFAULT_SPAWN = 325
 
+/** 地形优先级：数值越大越"高"，边缘过渡方向为高优先级向低优先级渐变 */
+const TERRAIN_PRIORITY: Record<string, number> = {
+  water: 0,
+  sand: 1,
+  dirt: 2,
+  grass: 3,
+}
+
+/** 获取地形优先级（未知类型视为最低，避免渲染异常） */
+function terrainPriority(type: string): number {
+  return TERRAIN_PRIORITY[type] ?? 0
+}
+
+/** 判断两个地形类型之间是否需要渲染边缘过渡（仅对视觉差异显著的过渡渲染） */
+function shouldRenderEdge(higherType: string, lowerType: string): boolean {
+  // grass→dirt 差异小，不渲染边缘；其余过渡（到 water/sand）都渲染
+  if (higherType === 'grass' && lowerType === 'dirt') return false
+  return true
+}
+
 interface ChunkLayer {
   /** 该区块的地形 Blitter（每种地形类型每个变体各一个） */
   blitters: Phaser.GameObjects.Blitter[]
   /** blitter 索引映射：type -> [variantStartIndex, variantCount] */
   blitterIndex: Map<string, number>
+  /** 地形边界过渡 Blitter 数组（叠加在 base tile 之上，水面动画之下） */
+  edgeBlitters: Phaser.GameObjects.Blitter[]
   /** 水面波纹动画 Blitter（可选，仅含 water tile 的区块才有） */
   waterAnim?: Phaser.GameObjects.Blitter
   /** 已探索但不可见时的整块半透明迷雾遮罩，undefined 表示无遮罩 */
@@ -242,7 +264,7 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    const layer: ChunkLayer = { blitters, blitterIndex, fog: undefined }
+    const layer: ChunkLayer = { blitters, blitterIndex, edgeBlitters: [], fog: undefined }
     this.chunkLayers.set(chunkId, layer)
     this.populateChunkBobs(chunkId, layer)
   }
@@ -253,6 +275,8 @@ export class WorldScene extends Phaser.Scene {
     const terrain = getChunkTerrain(chunkId)
     const chunkSeed = hashStringToSeed(chunkId)
     let hasWater = false
+    /** 需要绘制边缘过渡的 tile：[wx, wy, type, dir[]] */
+    const edgeTiles: Array<{ wx: number; wy: number; type: string; dirs: string[] }> = []
 
     for (let ly = 0; ly < CHUNK_SIZE; ly++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -274,13 +298,46 @@ export class WorldScene extends Phaser.Scene {
         blitter.create(center.x - TILE_WIDTH / 2, center.y - TILE_HEIGHT / 2)
 
         if (type === 'water') hasWater = true
+
+        // 检查四个邻居，如果邻居是更低优先级的地形，则当前 tile 需要在该方向绘制边缘过渡
+        // 仅对视觉差异显著的过渡（到 water/sand）渲染，grass→dirt 差异小跳过
+        const dirs: string[] = []
+        const upType = getTileType(wx, wy - 1)
+        const downType = getTileType(wx, wy + 1)
+        const leftType = getTileType(wx - 1, wy)
+        const rightType = getTileType(wx + 1, wy)
+        if (terrainPriority(upType) < terrainPriority(type) && shouldRenderEdge(type, upType)) dirs.push('top')
+        if (terrainPriority(downType) < terrainPriority(type) && shouldRenderEdge(type, downType)) dirs.push('bottom')
+        if (terrainPriority(leftType) < terrainPriority(type) && shouldRenderEdge(type, leftType)) dirs.push('left')
+        if (terrainPriority(rightType) < terrainPriority(type) && shouldRenderEdge(type, rightType)) dirs.push('right')
+        if (dirs.length > 0) edgeTiles.push({ wx, wy, type, dirs })
+      }
+    }
+
+    // 为每个边缘 tile 的 Bob 填入对应方向贴图的 Blitter（按需创建，缓存复用）
+    if (edgeTiles.length > 0) {
+      /** edge 贴图 key -> Blitter 映射（仅本区块内复用） */
+      const edgeBlitterMap = new Map<string, Phaser.GameObjects.Blitter>()
+      for (const { wx, wy, type, dirs } of edgeTiles) {
+        const center = gridToIso(wx, wy)
+        for (const dir of dirs) {
+          const key = `edge-${type}-${dir}`
+          let blitter = edgeBlitterMap.get(key)
+          if (!blitter) {
+            blitter = this.add.blitter(0, 0, key)
+            blitter.setDepth(TERRAIN_DEPTH + 1)
+            edgeBlitterMap.set(key, blitter)
+            layer.edgeBlitters.push(blitter)
+          }
+          blitter.create(center.x - TILE_WIDTH / 2, center.y - TILE_HEIGHT / 2)
+        }
       }
     }
 
     // 如果区块包含水域，创建水面波纹动画 Blitter
     if (hasWater && !layer.waterAnim) {
       const animBlitter = this.add.blitter(0, 0, 'water-anim-0')
-      animBlitter.setDepth(TERRAIN_DEPTH + 1)
+      animBlitter.setDepth(TERRAIN_DEPTH + 2)
       for (let ly = 0; ly < CHUNK_SIZE; ly++) {
         for (let lx = 0; lx < CHUNK_SIZE; lx++) {
           if (terrain[ly][lx] !== 'water') continue
@@ -369,6 +426,7 @@ export class WorldScene extends Phaser.Scene {
     const layer = this.chunkLayers.get(chunkId)
     if (!layer) return
     for (const blitter of layer.blitters) blitter.destroy()
+    for (const blitter of layer.edgeBlitters) blitter.destroy()
     if (layer.waterAnim) layer.waterAnim.destroy()
     if (layer.fog) layer.fog.destroy()
     this.chunkLayers.delete(chunkId)

@@ -33,6 +33,7 @@ export class PreloadScene extends Phaser.Scene {
 
   preload(): void {
     this.generateTileTextures()
+    this.generateEdgeTextures()
     this.generateWaterAnimTextures()
     this.generatePlayerTexture()
     this.generateResourceTextures()
@@ -79,19 +80,46 @@ export class PreloadScene extends Phaser.Scene {
             }
           }
 
-          // 顶部高光 / 底部阴影（微弱斜面，制造立体 tile 感）
-          g.fillStyle(0xffffff, 0.07)
-          g.fillRect(0, 0, TILE_WIDTH, 2)
-          g.fillStyle(0x000000, 0.10)
-          g.fillRect(0, TILE_HEIGHT - 2, TILE_WIDTH, 2)
-
-          // 网格线（极淡，帮助辨识边界）
-          g.lineStyle(1, 0x000000, 0.10)
-          g.strokeRect(0, 0, TILE_WIDTH, TILE_HEIGHT)
-
+          // 不再绘制网格线和斜面高光，让同类地形 tile 无缝衔接；
+          // 地形边界由 Edge 贴图系统（generateEdgeTextures）平滑过渡。
           g.generateTexture(key, TILE_WIDTH, TILE_HEIGHT)
           g.destroy()
         }
+      }
+    }
+  }
+
+  /**
+   * 生成地形边界过渡贴图。
+   *
+   * 每种地形类型 × 4 个方向（上/下/左/右）各一张：从该地形颜色渐变到透明的条带，
+   * 叠加在相邻"低优先级"地形 tile 的对应边缘上，实现 grass→water 等边界的柔和过渡。
+   * 贴图 key：`edge-{type}-{dir}`（dir: top/bottom/left/right）。
+   */
+  private generateEdgeTextures(): void {
+    // 过渡条带宽度（像素）
+    const EDGE_WIDTH = 10
+    const dirs = ['top', 'bottom', 'left', 'right'] as const
+
+    for (const [type, colors] of Object.entries(TILE_PALETTES)) {
+      const baseColor = colors[0]
+      for (const dir of dirs) {
+        const key = `edge-${type}-${dir}`
+        if (this.textures.exists(key)) continue
+
+        const g = this.add.graphics()
+        // 4 条渐变条纹：由该地形色逐渐变透明（阶梯渐变，像素风）
+        for (let step = 0; step < 4; step++) {
+          const alpha = 0.85 - step * 0.2
+          const band = EDGE_WIDTH / 4
+          g.fillStyle(baseColor, alpha)
+          if (dir === 'top') g.fillRect(0, step * band, TILE_WIDTH, band)
+          else if (dir === 'bottom') g.fillRect(0, TILE_HEIGHT - EDGE_WIDTH + step * band, TILE_WIDTH, band)
+          else if (dir === 'left') g.fillRect(step * band, 0, band, TILE_HEIGHT)
+          else g.fillRect(TILE_WIDTH - EDGE_WIDTH + step * band, 0, band, TILE_HEIGHT)
+        }
+        g.generateTexture(key, TILE_WIDTH, TILE_HEIGHT)
+        g.destroy()
       }
     }
   }
