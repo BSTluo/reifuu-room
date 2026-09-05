@@ -2,7 +2,7 @@
 
 > 本文件用于**当前团队 → 下一个团队**的工作交接。它记录项目当前真实状态、已完成/进行中/待办工作、团队结构、运行方式与已知问题。
 > 下一个团队接手时，请先通读本文件 + `docs/GDD.md`，再检查代码现状。
-> 最后更新：2026-09-04（好友系统 §6.7 追加）
+> 最后更新：2026-09-05（团队系统 §6.9、房屋内部系统 §6.10、移动端适配 §6.11 追加）
 
 ---
 
@@ -293,6 +293,92 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 
 ---
 
+## 6.9 ⭐ 团队系统（GDD 2.9，✅ 前后端均已完成）
+
+**任务状态**：已完成。团队创建/搜索/申请/邀请/管理 + 团队聊天端到端验证通过。
+
+### 6.9.1 数据库
+- `teams (id, name, description, leader_character_id, max_members, created_at, updated_at)`：团队基本信息，`leader_character_id` FK 到 `characters`。
+- `team_members (id, team_id, character_id, role ENUM('leader','member'), joined_at)`：团队成员，`UNIQUE KEY (team_id, character_id)`。
+- `team_invitations (id, team_id, from_character_id, to_character_id, status ENUM('pending','accepted','rejected'), created_at, responded_at)`：团队邀请。
+- `team_applications (id, team_id, character_id, status ENUM('pending','accepted','rejected'), created_at, responded_at)`：团队申请。
+
+### 6.9.2 后端
+- **Service**：`server/src/services/TeamService.ts`——`createTeam`（校验名称唯一/≤20字、队长无其他团队）、`searchTeams`（模糊搜索名称/描述）、`applyToTeam`（校验非成员/非满员）、`acceptApplication`（仅队长）、`rejectApplication`、`inviteToTeam`（仅队长）、`acceptInvitation`、`rejectInvitation`、`kickMember`（仅队长，不能踢自己）、`transferLeadership`、`disbandTeam`（仅队长）、`leaveTeam`（队长不能直接离开需先转让或解散）、`getTeamInfo`、`getTeamMembers`、`getMyTeam`、`getPendingApplications`、`getPendingInvitations`。
+- **REST**：`server/src/routes/team.ts`（挂载 `/team`）：`POST /team/create`、`GET /team/search`、`POST /team/apply/:teamId`、`POST /team/accept-application/:applicationId`、`POST /team/reject-application/:applicationId`、`POST /team/invite`、`POST /team/accept-invitation/:invitationId`、`POST /team/reject-invitation/:invitationId`、`POST /team/kick/:memberId`、`POST /team/transfer/:memberId`、`POST /team/disband`、`POST /team/leave`、`GET /team/my-team`、`GET /team/:teamId`、`GET /team/:teamId/members`、`GET /team/applications/pending`、`GET /team/invitations/pending`。
+- **Socket**：C→S `team:create` / `team:search` / `team:apply` / `team:accept-application` / `team:reject-application` / `team:invite` / `team:accept-invitation` / `team:reject-invitation` / `team:kick` / `team:transfer` / `team:disband` / `team:leave` / `team:request-state`；S→C `team:created` / `team:search-results` / `team:applied` / `team:application-accepted` / `team:application-rejected` / `team:invited` / `team:invitation-accepted` / `team:invitation-rejected` / `team:kicked` / `team:transferred` / `team:disbanded` / `team:left` / `team:state` / `team:member-joined` / `team:member-left`。
+- **团队聊天**：socket 事件 `team:message`（C→S，`{ teamId, content }`）→ 持久化到 `team_messages` 表 → 广播给团队在线成员。
+
+### 6.9.3 前端
+- **Store**：`stores/team.ts`（team/members/applications/invitations；`registerTeamListeners()` 由 GameView 挂载时调用）。
+- **UI**：`components/game/HUD/TeamPanel.vue`——创建团队表单、搜索团队（模糊搜索+申请加入）、我的团队（成员列表、邀请、踢人、转让队长、解散）、申请/邀请管理（接受/拒绝）、团队聊天 tab；GameView 加 👥 团队按钮 + 新邀请/申请 toast。
+
+### 6.9.4 验证方式（已通过 ✅）
+1. REST：登录 → `POST /team/create` → `GET /team/search` → `POST /team/apply/:teamId` → 队长 `POST /team/accept-application/:id` → `GET /team/my-team` → `POST /team/invite` → 被邀请者 `POST /team/accept-invitation/:id` → `POST /team/kick/:memberId` → `POST /team/transfer/:memberId` → `POST /team/disband`。
+2. Socket：双客户端连接，`team:create` → `team:search` → `team:apply` → `team:accept-application` → 双方收 `team:member-joined` → `team:message` 团队聊天广播。
+
+---
+
+## 6.10 ⭐ 房屋内部系统（✅ 前后端均已完成）
+
+**任务状态**：已完成。进入房屋后显示2.5D房间视图，可自由布置家具，家具支持插件交互。
+
+### 6.10.1 后端
+- **Service**：`server/src/services/InteriorService.ts`——`getInterior`（获取房间内部状态）、`placeFurniture`（放置家具，校验位置/碰撞/资源）、`removeFurniture`（移除家具，返还资源）、`moveFurniture`（移动家具）、`activatePlugin`（激活家具关联的插件）、`deactivatePlugin`（停用插件）。
+- **REST**：`server/src/routes/interior.ts`（挂载 `/interior`）：`GET /interior/:roomId`、`POST /interior/:roomId/furniture`、`DELETE /interior/:roomId/furniture/:furnitureId`、`PUT /interior/:roomId/furniture/:furnitureId`、`POST /interior/:roomId/plugin/:pluginId/activate`、`POST /interior/:roomId/plugin/:pluginId/deactivate`。
+- **Socket**：C→S `interior:request-state` / `interior:place-furniture` / `interior:remove-furniture` / `interior:move-furniture`；S→C `interior:state` / `interior:furniture-placed` / `interior:furniture-removed` / `interior:furniture-moved`。
+- **家具目录**：`FurnitureCatalogEntryDTO` 包含 `id/name/description/icon/resourceCost/size/pluginId`，`pluginId` 可选，关联插件（如牌桌→doudizhu，收音机→radio-fm）。
+
+### 6.10.2 前端
+- **Store**：`stores/interior.ts`（furniture list/catalog/active plugins）。
+- **Scene**：`game/scenes/InteriorScene.ts`——Phaser 场景渲染2.5D房间，墙壁/地板/家具精灵，拖拽放置家具，点击家具触发插件交互。
+- **UI**：`components/game/HUD/InteriorView.vue`——房间内 HUD，包含家具目录面板（可拖拽到房间）、聊天面板、插件容器（动态渲染插件组件）、家具交互提示（靠近时显示 E 键提示）。
+- **插件交互**：靠近有 `pluginId` 的家具时，按 E 键或点击触发 `activatePlugin`，插件组件在房间内渲染（如牌桌打开斗地主、收音机打开 FM 播放器）。
+
+### 6.10.3 内建插件
+| 插件 ID | 名称 | 组件 | 功能 |
+|---------|------|------|------|
+| `music-sync` | 一起听歌 | `MusicPlayer.vue` | 房间内同步播放音乐，控制器模式 |
+| `video-sync` | 一起看视频 | `VideoPlayer.vue` | YouTube 视频同步播放 |
+| `radio-fm` | 收音机 | `RadioPlayer.vue` | FM 广播电台收听 |
+| `doudizhu` | 斗地主 | `CardTable.vue` | 多人斗地主纸牌游戏 |
+
+### 6.10.4 验证方式（已通过 ✅）
+1. 进入房屋 → 显示2.5D房间视图 → 打开家具目录 → 拖拽家具到房间 → 家具渲染在房间中。
+2. 靠近牌桌 → 按 E 键 → 打开斗地主插件 → 多人同步游戏状态。
+3. 靠近收音机 → 点击 → 打开 FM 播放器 → 选择电台播放。
+
+---
+
+## 6.11 ⭐ 移动端适配（✅ 前端已完成）
+
+**任务状态**：已完成。移动端响应式布局 + 虚拟摇杆 + 触摸优化。
+
+### 6.11.1 设备检测
+- **Composable**：`composables/useMobile.ts`——`isMobile`（<768px）、`isTablet`（768-1024px）、`isDesktop`（≥1024px），窗口 resize 时自动更新（100ms debounce）。
+
+### 6.11.2 移动端布局
+- **GameView.vue**：
+  - 桌面端：左侧侧边栏菜单 + 右侧游戏画布。
+  - 移动端：隐藏侧边栏，底部虚拟摇杆 + 操作按钮（交互/菜单），底部弹出式功能菜单（背包/建造/好友/信箱/飞鸽/团队），全屏滑动面板。
+- **InteriorView.vue**：
+  - 移动端：插件容器和聊天面板移到底部，全宽，圆角顶部，更大的触摸目标。
+- **ChatPanel.vue**：
+  - 移动端：输入框和按钮 padding 增大（10px），font-size 增大（16px），插件按钮 padding 增大。
+
+### 6.11.3 虚拟控件
+- **MobileControls.vue**：
+  - 左下角虚拟摇杆（120px 底座 +50px 摇杆），触摸拖拽控制移动方向，阈值0.3 触发移动事件。
+  - 右下角操作按钮：交互（E 键）、菜单（切换底部抽屉）。
+  - 防止触摸事件冒泡到游戏画布（`preventTouchDefault`）。
+
+### 6.11.4 响应式断点
+- `<768px`：移动端布局，虚拟摇杆，底部菜单。
+- `768-1024px`：平板端，可选择性适配。
+- `≥1024px`：桌面端布局。
+
+---
+
 ## 7. 测试账号（仍在数据库中）
 
 | 账号 | 密码 | 角色 | 出生区块 | 世界坐标 |
@@ -342,8 +428,15 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 2. ~~视野迷雾前端~~（**已完成** §5.2）。
 3. ~~复核现有 API 的前端对接~~（**已完成**：资源采集/建造/背包/聊天室均已端到端联通并 REST 验证通过）。
 4. ~~进入聊天室实际使用~~（**已完成** §6）：点击房屋标记 → 进入房间 → 实时文字聊天，前后端 + 浏览器 UI 均验证通过。
-5. ~~聊天室进阶功能~~（**音乐/视频同步播放已完成** §6.5）：房间权限管理（成员角色/邀请制）、房间装饰系统待实现。
-6. **插件扩展**：当前内建 `music-sync` / `video-sync` 两个插件，新增插件只需：①在 `plugins.ts` 注册（id/name/icon/component）②在服务端 `socket.ts` 的 `allowedPlugins` 数组加 id ③编写插件 Vue 组件（props: `roomId`，emit: `close`）。
-7. ~~规划 Phase 3（好友/社交、传送门）~~（**好友系统已完成** §6.7，**飞鸽传信已完成** §6.8）与 Phase 4（交通工具）。剩余 Phase 3：传送门系统。
-8. 建议为前端新增 UI/UX 专职成员补齐界面质感（该角色上一团队已移除）。
-9. 前端接入正式美术资源时替换 `PreloadScene` 的 Graphics 生成贴图（贴图 key 不变即可平滑替换）。
+5. ~~聊天室进阶功能~~（**音乐/视频同步播放已完成** §6.5、**房屋内部系统已完成** §6.10）：房间权限管理（成员角色/邀请制）、房间装饰系统待实现。
+6. ~~插件扩展~~（**已完成** §6.5、§6.10）：当前内建四个插件（`music-sync` / `video-sync` / `radio-fm` / `doudizhu`）已可用于房屋家具交互；新增插件只需：①在 `plugins.ts` 注册（id/name/icon/component）②在服务端 `socket.ts` 的 `allowedPlugins` 数组加 id ③编写插件 Vue 组件（props: `roomId`，emit: `close`）。
+7. ~~规划 Phase 3（好友/社交、传送门）~~（**好友系统已完成** §6.7，**飞鸽传信已完成** §6.8，**团队系统已完成** §6.9）与 Phase 4（交通工具）。剩余 Phase 3：传送门系统。
+8. ~~移动端适配~~（**已完成** §6.11）：虚拟摇杆、响应式布局、触摸优化已全部实现，可接受移动设备测试。
+9. **后续功能**：
+   - 传送门系统（Phase 3）：城镇间快速旅行。
+   - 交通工具（Phase 4）：马车/骑马跨区块移动。
+   - 高级交通工具（Phase 4.5）：船只、飞行器跨洲。
+   - 房间权限管理：邀请制成员、访客隔离。
+   - 房间装饰/家具系统扩展：自定义贴图、动画。
+10. 建议为前端新增 UI/UX 专职成员补齐界面质感（该角色上一团队已移除）。
+11. 前端接入正式美术资源时替换 `PreloadScene` 的 Graphics 生成贴图（贴图 key 不变即可平滑替换）。
