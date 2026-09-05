@@ -87,6 +87,8 @@ export type GameEvents = {
   }
   /** 点击带插件的家具 → 激活对应插件 */
   'ui:activate-furniture-plugin': { roomId: string; pluginId: string; furnitureId: string }
+  /** 走出家具交互范围 → 停用当前插件 */
+  'ui:deactivate-furniture-plugin': { roomId: string; pluginId: string }
   /** UI 请求退出房间内部 → 返回大世界 */
   'ui:exit-room-interior': void
 

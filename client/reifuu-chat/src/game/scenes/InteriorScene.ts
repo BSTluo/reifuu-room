@@ -67,6 +67,15 @@ export class InteriorScene extends Phaser.Scene {
   private roomStore: ReturnType<typeof useRoomStore> | null = null
   private characterStore: ReturnType<typeof useCharacterStore> | null = null
 
+  // ---- Proximity-based plugin interaction ----
+  private keyE!: Phaser.Input.Keyboard.Key
+  /** 当前靠近的带插件的家具（null 表示附近没有可交互家具） */
+  private nearbyPluginFurniture: FurnitureItemDTO | null = null
+  /** 浮动交互提示文字 */
+  private interactionPrompt!: Phaser.GameObjects.Text
+  /** 交互半径（像素） */
+  private readonly INTERACTION_RADIUS = 80
+
   constructor() {
     super('InteriorScene')
   }
@@ -135,6 +144,20 @@ export class InteriorScene extends Phaser.Scene {
     this.keyA = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.A)
     this.keyS = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.S)
     this.keyD = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D)
+    this.keyE = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.E)
+
+    // Interaction prompt (hidden by default)
+    this.interactionPrompt = this.add.text(0, 0, '', {
+      fontSize: '14px',
+      color: '#ffffff',
+      backgroundColor: '#000000aa',
+      padding: { x: 8, y: 4 },
+      stroke: '#000000',
+      strokeThickness: 2,
+    })
+    this.interactionPrompt.setOrigin(0.5, 1)
+    this.interactionPrompt.setDepth(9999)
+    this.interactionPrompt.setVisible(false)
 
     this.input.on('pointerdown', this.onPointerDown, this)
 
@@ -155,6 +178,8 @@ export class InteriorScene extends Phaser.Scene {
   update(_time: number, delta: number): void {
     this.handleKeyboardInput(delta)
     this.updatePlacementPreview()
+    this.updateProximityInteraction()
+    this.handleInteractionInput()
   }
 
   shutdown(): void {
@@ -168,6 +193,10 @@ export class InteriorScene extends Phaser.Scene {
       this.placementPreview.destroy()
       this.placementPreview = null
     }
+    if (this.interactionPrompt) {
+      this.interactionPrompt.destroy()
+    }
+    this.nearbyPluginFurniture = null
     this.interiorStore?.cancelPlacement()
   }
 
@@ -429,6 +458,91 @@ export class InteriorScene extends Phaser.Scene {
     this.placementPreview.strokeRect(gx * ITILE_W, gy * ITILE_H, w * ITILE_W, h * ITILE_H)
     this.placementPreview.fillStyle(0x00ff00, 0.15)
     this.placementPreview.fillRect(gx * ITILE_W, gy * ITILE_H, w * ITILE_W, h * ITILE_H)
+  }
+
+  // ==================== Proximity Plugin Interaction ====================
+
+  /** 每帧检测玩家是否靠近带插件的家具，更新交互提示 */
+  private updateProximityInteraction(): void {
+    const store = this.interiorStore
+    if (!store) return
+
+    const px = this.player.x
+    const py = this.player.y
+
+    let closestFurniture: FurnitureItemDTO | null = null
+    let closestDist = Infinity
+
+    for (const item of store.furniture) {
+      const catalogEntry = store.catalog.find((c) => c.type === item.type)
+      if (!catalogEntry?.pluginId) continue
+
+      const visual = FURNITURE_VISUALS[item.type]
+      const w = visual?.w ?? 1
+      const h = visual?.h ?? 1
+      // Furniture center in pixels
+      const fx = item.x * ITILE_W + (w * ITILE_W) / 2
+      const fy = item.y * ITILE_H + (h * ITILE_H) / 2
+      const dist = Phaser.Math.Distance.Between(px, py, fx, fy)
+
+      if (dist < this.INTERACTION_RADIUS && dist < closestDist) {
+        closestDist = dist
+        closestFurniture = item
+      }
+    }
+
+    // Update nearby state
+    if (closestFurniture !== this.nearbyPluginFurniture) {
+      // Walked away from previous furniture → deactivate its plugin
+      if (this.nearbyPluginFurniture && this.roomStore?.roomId) {
+        const prevCatalog = store.catalog.find((c) => c.type === this.nearbyPluginFurniture!.type)
+        if (prevCatalog?.pluginId) {
+          EventBus.emit('ui:deactivate-furniture-plugin', {
+            roomId: this.roomStore.roomId,
+            pluginId: prevCatalog.pluginId,
+          })
+        }
+      }
+      this.nearbyPluginFurniture = closestFurniture
+    }
+
+    // Update prompt position and visibility
+    if (this.nearbyPluginFurniture) {
+      const item = this.nearbyPluginFurniture
+      const visual = FURNITURE_VISUALS[item.type]
+      const w = visual?.w ?? 1
+      const h = visual?.h ?? 1
+      const fx = item.x * ITILE_W + (w * ITILE_W) / 2
+      const fy = item.y * ITILE_H
+      const catalogEntry = store.catalog.find((c) => c.type === item.type)
+      const promptText = `${visual?.icon ?? '✨'} 按 E 打开${catalogEntry?.name ?? item.type}`
+      this.interactionPrompt.setText(promptText)
+      this.interactionPrompt.setPosition(fx, fy - 8)
+      this.interactionPrompt.setVisible(true)
+      // Keep prompt on top of everything
+      this.interactionPrompt.setDepth(9999)
+    } else {
+      this.interactionPrompt.setVisible(false)
+    }
+  }
+
+  /** 处理 E 键交互：激活靠近的家具插件 */
+  private handleInteractionInput(): void {
+    if (!Phaser.Input.Keyboard.JustDown(this.keyE)) return
+    if (!this.nearbyPluginFurniture || !this.roomStore?.roomId) return
+
+    const store = this.interiorStore
+    if (!store) return
+
+    const item = this.nearbyPluginFurniture
+    const catalogEntry = store.catalog.find((c) => c.type === item.type)
+    if (!catalogEntry?.pluginId) return
+
+    EventBus.emit('ui:activate-furniture-plugin', {
+      roomId: this.roomStore.roomId,
+      pluginId: catalogEntry.pluginId,
+      furnitureId: item.id,
+    })
   }
 
   // ==================== Furniture Change Handler ====================

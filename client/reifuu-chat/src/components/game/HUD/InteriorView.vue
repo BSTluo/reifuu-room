@@ -5,7 +5,7 @@ import { useRoomStore } from '../../../stores/room'
 import { useInteriorStore } from '../../../stores/interior'
 import { usePluginStore } from '../../../stores/plugin'
 import { useCharacterStore } from '../../../stores/character'
-import { BUILTIN_PLUGINS, getPluginMeta, type PluginMeta } from './plugins'
+import { getPluginMeta, type PluginMeta } from './plugins'
 import ChatPanel from './ChatPanel.vue'
 import type { FurnitureCatalogEntryDTO } from '../../../api/types'
 
@@ -27,12 +27,6 @@ const placeableCatalog = computed(() =>
   interiorStore.catalog.filter((c) => isOwner.value || c.memberPlaceable)
 )
 
-/** 当前房间内已激活的插件（用于显示状态） */
-const activePlugins = computed(() => {
-  if (!roomStore.roomId) return []
-  return BUILTIN_PLUGINS.filter((p) => pluginStore.isPluginActive(roomStore.roomId!, p.id))
-})
-
 // ---- Plugin activation from furniture click ----
 function onActivateFurniturePlugin(payload: { roomId: string; pluginId: string; furnitureId: string }) {
   if (payload.roomId !== roomStore.roomId) return
@@ -47,26 +41,22 @@ function onActivateFurniturePlugin(payload: { roomId: string; pluginId: string; 
   activePluginMeta.value = meta
 }
 
-// ---- Plugin toolbar controls ----
-function togglePlugin(meta: PluginMeta) {
-  if (!roomStore.roomId) return
-
-  if (activePluginId.value === meta.id) {
-    activePluginId.value = null
-    activePluginMeta.value = null
-    return
-  }
-
-  if (!pluginStore.isPluginActive(roomStore.roomId, meta.id)) {
-    pluginStore.activatePlugin(roomStore.roomId, meta.id)
-  }
-  activePluginId.value = meta.id
-  activePluginMeta.value = meta
-}
-
+// ---- Plugin close (manual or walk-away) ----
 function closePlugin() {
+  if (activePluginId.value && roomStore.roomId) {
+    pluginStore.deactivatePlugin(roomStore.roomId, activePluginId.value)
+  }
   activePluginId.value = null
   activePluginMeta.value = null
+}
+
+// ---- Walk-away deactivation from scene ----
+function onDeactivateFurniturePlugin(payload: { roomId: string; pluginId: string }) {
+  if (payload.roomId !== roomStore.roomId) return
+  if (activePluginId.value === payload.pluginId) {
+    activePluginId.value = null
+    activePluginMeta.value = null
+  }
 }
 
 // ---- Furniture placement ----
@@ -101,6 +91,7 @@ function exitRoom() {
 
 onMounted(() => {
   EventBus.on('ui:activate-furniture-plugin', onActivateFurniturePlugin)
+  EventBus.on('ui:deactivate-furniture-plugin', onDeactivateFurniturePlugin)
   // 注意：pluginStore.init() 由 ChatPanel 负责（InteriorView 内嵌 ChatPanel）
   // 加载当前房间的家具
   interiorStore.fetchFurniture()
@@ -108,6 +99,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   EventBus.off('ui:activate-furniture-plugin', onActivateFurniturePlugin)
+  EventBus.off('ui:deactivate-furniture-plugin', onDeactivateFurniturePlugin)
   // 注意：pluginStore.dispose() 由 ChatPanel 负责
 })
 </script>
@@ -131,22 +123,12 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- Plugin toolbar -->
-    <div class="plugin-toolbar">
-      <button
-        v-for="plugin in BUILTIN_PLUGINS"
-        :key="plugin.id"
-        class="plugin-btn"
-        :class="{ active: activePluginId === plugin.id }"
-        :title="plugin.description"
-        @click="togglePlugin(plugin)"
-      >
-        {{ plugin.icon }} {{ plugin.name }}
-      </button>
-    </div>
-
-    <!-- Plugin container -->
+    <!-- Plugin container (shown when near a plugin furniture) -->
     <div v-if="activePluginMeta && roomStore.roomId" class="plugin-container">
+      <div class="plugin-header">
+        <span class="plugin-title">{{ activePluginMeta.icon }} {{ activePluginMeta.name }}</span>
+        <button class="plugin-close-btn" @click="closePlugin">✕</button>
+      </div>
       <component
         :is="activePluginMeta.component"
         :room-id="roomStore.roomId"
@@ -256,33 +238,9 @@ onBeforeUnmount(() => {
   background: #c06060;
 }
 
-.plugin-toolbar {
-  display: flex;
-  gap: 6px;
-  padding: 6px 12px;
-  background: rgba(20, 24, 28, 0.7);
-  pointer-events: auto;
-}
-
-.plugin-btn {
-  padding: 4px 10px;
-  border-radius: 4px;
-  border: 1px solid #3c4b59;
-  background: #2a3540;
-  color: #fff;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.plugin-btn:hover,
-.plugin-btn.active {
-  background: #35434f;
-  border-color: #4dd0e1;
-}
-
 .plugin-container {
   position: absolute;
-  top: 80px;
+  top: 50px;
   right: 12px;
   width: 300px;
   background: rgba(20, 24, 28, 0.92);
@@ -291,6 +249,36 @@ onBeforeUnmount(() => {
   padding: 10px;
   pointer-events: auto;
   z-index: 40;
+}
+
+.plugin-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #3c4b59;
+}
+
+.plugin-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: #4dd0e1;
+}
+
+.plugin-close-btn {
+  background: none;
+  border: none;
+  color: #9fb2c0;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.plugin-close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 
 .catalog-panel {
