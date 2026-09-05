@@ -1,6 +1,7 @@
 import Phaser from 'phaser'
 import { TILE_HEIGHT, TILE_WIDTH } from '../utils/isometric'
 import { hashStringToSeed, createSeededRandom } from '../utils/rng'
+import { AUTOTILE_PAIRS } from '../utils/autotile-constants'
 
 /** 每种地形的变体数量（用于纹理丰富度） */
 const TILE_VARIANTS = 3
@@ -74,6 +75,7 @@ const SPRITE_FILES: Record<string, string> = {
   'player-placeholder': 'player-placeholder.png',
   // 资源节点（24×28）
   'resource-wood': 'resource-wood.png',
+  'tree-forest': 'tree-forest.svg',
   'resource-stone': 'resource-stone.png',
   'resource-mineral': 'resource-mineral.png',
   'resource-coral': 'resource-coral.png',
@@ -123,12 +125,21 @@ export class PreloadScene extends Phaser.Scene {
     for (const [key, file] of Object.entries(SPRITE_FILES)) {
       this.load.image(key, `assets/sprites/${file}`)
     }
+    // Autotile 过渡贴图集
+    for (const pair of AUTOTILE_PAIRS) {
+      // 版本参数避免 Phaser/浏览器复用旧的过渡贴图缓存。
+      this.load.image(
+        `autotile-${pair.high}-${pair.low}`,
+        `assets/autotiles/${pair.filename}?v=20260905-terrain-3`,
+      )
+    }
   }
 
   create(): void {
     // 为加载失败的贴图生成 Graphics 占位图
     this.generateTileTextures()
-    this.generateEdgeTextures()
+    this.generateAutotileFallbacks()
+    this.registerAutotileFrames()
     this.generateWaterAnimTextures()
     this.generatePlayerTexture()
     this.generateResourceTextures()
@@ -174,7 +185,7 @@ export class PreloadScene extends Phaser.Scene {
           }
 
           // 不再绘制网格线和斜面高光，让同类地形 tile 无缝衔接；
-          // 地形边界由 Edge 贴图系统（generateEdgeTextures）平滑过渡。
+          // 地形边界由 Autotile 贴图集系统平滑过渡。
           g.generateTexture(key, TILE_WIDTH, TILE_HEIGHT)
           g.destroy()
         }
@@ -183,36 +194,88 @@ export class PreloadScene extends Phaser.Scene {
   }
 
   /**
-   * 生成地形边界过渡贴图。
+   * 为加载失败的 autotile 贴图集生成 Graphics 后备贴图。
    *
-   * 每种地形类型 × 4 个方向（上/下/左/右）各一张：从该地形颜色渐变到透明的条带，
-   * 叠加在相邻"低优先级"地形 tile 的对应边缘上，实现 grass→water 等边界的柔和过渡。
-   * 贴图 key：`edge-{type}-{dir}`（dir: top/bottom/left/right）。
+   * 每个贴图集 192×240（4 列 × 5 行 = 16 个 48×48 子块），
+   * 仅在 PNG 加载失败时使用。后备贴图用纯色填充高地形区域。
+   * 贴图 key：`autotile-{high}-{low}`。
    */
-  private generateEdgeTextures(): void {
-    // 过渡条带宽度（像素）
-    const EDGE_WIDTH = 10
-    const dirs = ['top', 'bottom', 'left', 'right'] as const
+  private generateAutotileFallbacks(): void {
+    const SUB = 48
+    const COLS = 4
+    const ROWS = 5
+    const W = COLS * SUB
+    const H = ROWS * SUB
 
-    for (const [type, colors] of Object.entries(TILE_PALETTES)) {
-      const baseColor = colors[0]
-      for (const dir of dirs) {
-        const key = `edge-${type}-${dir}`
-        if (this.textures.exists(key)) continue
+    for (const pair of AUTOTILE_PAIRS) {
+      const key = `autotile-${pair.high}-${pair.low}`
+      if (this.textures.exists(key)) continue
 
-        const g = this.add.graphics()
-        // 4 条渐变条纹：由该地形色逐渐变透明（阶梯渐变，像素风）
-        for (let step = 0; step < 4; step++) {
-          const alpha = 0.85 - step * 0.2
-          const band = EDGE_WIDTH / 4
-          g.fillStyle(baseColor, alpha)
-          if (dir === 'top') g.fillRect(0, step * band, TILE_WIDTH, band)
-          else if (dir === 'bottom') g.fillRect(0, TILE_HEIGHT - EDGE_WIDTH + step * band, TILE_WIDTH, band)
-          else if (dir === 'left') g.fillRect(step * band, 0, band, TILE_HEIGHT)
-          else g.fillRect(TILE_WIDTH - EDGE_WIDTH + step * band, 0, band, TILE_HEIGHT)
+      const highColor = TILE_PALETTES[pair.high]?.[0] ?? 0xff00ff
+      const lowColor = TILE_PALETTES[pair.low]?.[0] ?? 0x000000
+      const g = this.add.graphics()
+
+      // 用低地形色填充整个贴图集作为底色
+      g.fillStyle(lowColor, 1)
+      g.fillRect(0, 0, W, H)
+
+      // 对每个子块（位掩码 0-15），用高地形色填充对应象限
+      for (let mask = 0; mask < COLS * ROWS; mask++) {
+        const col = mask % COLS
+        const row = Math.floor(mask / COLS)
+        const ox = col * SUB
+        const oy = row * SUB
+
+        if (mask === 0) {
+          // 无高地形邻居：整个子块为低地形
+          continue
         }
-        g.generateTexture(key, TILE_WIDTH, TILE_HEIGHT)
-        g.destroy()
+
+        // 简化：用高地形色填充有高邻居的象限
+        for (let qx = 0; qx < 2; qx++) {
+          for (let qy = 0; qy < 2; qy++) {
+            const edgesHigh: boolean[] = [false, false, false, false]
+            if (qy === 0) edgesHigh[0] = !!(mask & 0x1) // up
+            else edgesHigh[2] = !!(mask & 0x4) // down
+            if (qx === 1) edgesHigh[1] = !!(mask & 0x2) // right
+            else edgesHigh[3] = !!(mask & 0x8) // left
+
+            // 象限两条边都高 → 填充该象限
+            const upDownHigh = qy === 0 ? edgesHigh[0] : edgesHigh[2]
+            const leftRightHigh = qx === 0 ? edgesHigh[3] : edgesHigh[1]
+            if (upDownHigh || leftRightHigh) {
+              g.fillStyle(highColor, 0.85)
+              g.fillRect(ox + qx * SUB / 2, oy + qy * SUB / 2, SUB / 2, SUB / 2)
+            }
+          }
+        }
+      }
+      g.generateTexture(key, W, H)
+      g.destroy()
+    }
+  }
+
+  /**
+   * 将每个 autotile 贴图集（192×240）拆分为 16 个 48×48 子块帧。
+   * 帧名 = 位掩码字符串（"0".."15"），Blitter 通过 frame 名引用对应子块。
+   */
+  private registerAutotileFrames(): void {
+    const SUB = 48
+    const COLS = 4
+
+    for (const pair of AUTOTILE_PAIRS) {
+      const key = `autotile-${pair.high}-${pair.low}`
+      const texture = this.textures.get(key)
+      if (!texture || texture.key === '__MISSING') continue
+
+      for (let mask = 0; mask < 16; mask++) {
+        const col = mask % COLS
+        const row = Math.floor(mask / COLS)
+        const frameName = String(mask)
+        // 避免重复注册
+        if (!texture.has(frameName)) {
+          texture.add(frameName, 0, col * SUB, row * SUB, SUB, SUB)
+        }
       }
     }
   }

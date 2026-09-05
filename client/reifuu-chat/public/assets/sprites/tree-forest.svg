@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="96" viewBox="0 0 64 96">
+  <defs>
+    <linearGradient id="trunk" x1="0" x2="1">
+      <stop offset="0" stop-color="#3d2418"/>
+      <stop offset="0.48" stop-color="#8b5730"/>
+      <stop offset="1" stop-color="#4d2c1c"/>
+    </linearGradient>
+    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#66b85e"/>
+      <stop offset="0.45" stop-color="#2f8248"/>
+      <stop offset="1" stop-color="#164d35"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="32" cy="91" rx="22" ry="5" fill="#173c2a" opacity=".38"/>
+  <path d="M26 88 C27 72 28 57 27 43 L37 43 C36 58 37 73 39 88 Z" fill="url(#trunk)"/>
+  <path d="M31 54 C23 46 18 39 15 31 M34 58 C42 49 47 42 50 33" stroke="#62391f" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <path d="M7 41 C5 28 13 18 25 18 C27 7 39 4 47 13 C58 14 62 24 57 33 C62 44 53 53 42 51 C33 59 21 55 18 48 C12 50 7 47 7 41 Z" fill="url(#leaf)" stroke="#123d2d" stroke-width="2"/>
+  <path d="M14 31 C16 21 24 16 32 18 C32 11 39 9 44 14 C36 16 30 23 29 31 C24 25 18 27 14 31 Z" fill="#83c96a" opacity=".75"/>
+  <path d="M39 22 C48 17 55 22 55 29 C50 27 45 29 41 34 C42 29 41 25 39 22 Z" fill="#4da657" opacity=".75"/>
+  <circle cx="21" cy="38" r="3" fill="#9bd878" opacity=".65"/>
+  <circle cx="45" cy="38" r="3" fill="#247341" opacity=".8"/>
+</svg>

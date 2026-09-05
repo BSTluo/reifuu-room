@@ -88,10 +88,9 @@ async function generateImage(
   spec: SpriteSpec,
   args: CliArgs,
 ): Promise<Buffer> {
-  // 构建 prompt：加上风格前缀和尺寸约束
-  const stylePrefix = 'Pixel art, top-down 2D RPG game sprite, clean pixelated edges, vibrant colors, '
+  // 构建 prompt：spec.prompt 已包含完整风格描述
   const sizeSuffix = ` The image must be exactly ${spec.width}x${spec.height} pixels in size.`
-  const fullPrompt = stylePrefix + spec.prompt + sizeSuffix
+  const fullPrompt = spec.prompt + sizeSuffix
 
   const body: Record<string, unknown> = {
     model: args.model,
@@ -165,17 +164,41 @@ async function resizeImage(
   targetH: number,
 ): Promise<Buffer> {
   try {
-    // 动态导入 sharp（可能未安装）
     const sharp = (await import('sharp')).default
-    return await sharp(input)
-      .resize(targetW, targetH, {
-        fit: 'fill',
-        kernel: 'nearest', // 像素画用最近邻插值保持锐利
-      })
+
+    // 先用 Lanczos 高质量缩放到目标尺寸（保留尽量多的细节）
+    let img = sharp(input).resize(targetW, targetH, {
+      fit: 'fill',
+      kernel: 'lanczos3',
+    })
+
+    // 色彩后处理：轻度 posterize 让缩放后的色块更干净
+    // 缩小后再做 posterize 效果更好
+    const { data, info } = await img
+      .raw()
+      .toBuffer({ resolveWithObject: true })
+
+    const channels = info.channels
+    // posterize: 将每通道 256 级量化到约 32 级（每通道 5 bits 感觉）
+    // 对 RGBA 通道做量化，alpha 保持更多精度
+    const levels = 32 // 色彩通道量化级数
+    for (let i = 0; i < data.length; i += channels) {
+      for (let c = 0; c < channels; c++) {
+        if (c === 3) continue // alpha 不做量化
+        // 量化: round(v/255 * (levels-1)) / (levels-1) * 255
+        const v = data[i + c]
+        data[i + c] = Math.round(
+          (Math.round((v / 255) * (levels - 1)) / (levels - 1)) * 255,
+        )
+      }
+    }
+
+    return await sharp(data, {
+      raw: { width: info.width, height: info.height, channels },
+    })
       .png()
       .toBuffer()
   } catch {
-    // sharp 未安装时，直接保存原始尺寸（由 API size 参数控制）
     console.warn('  ⚠ sharp 未安装，跳过缩放（图像尺寸由 API 参数决定）')
     return input
   }

@@ -4,8 +4,9 @@ import { OtherPlayerSprite } from '../entities/OtherPlayerSprite'
 import { PlayerSprite } from '../entities/PlayerSprite'
 import { socketClient } from '../network/SocketClient'
 import { gridToIso, isoToGrid, TILE_WIDTH, TILE_HEIGHT } from '../utils/isometric'
-import { CHUNK_SIZE, getChunkTerrain, chunkIdToWorldOrigin, worldToChunkId, getTileType, isIslandChunk, chunkIdToOrigin } from '../utils/world'
-import { hashStringToSeed } from '../utils/rng'
+import { CHUNK_SIZE, getChunkTerrain, chunkIdToWorldOrigin, worldToChunkId, getTileType, isIslandChunk, chunkIdToOrigin, isForestTile, isDesertTile, isMarshTile, isHighlandTile } from '../utils/world'
+import { hashStringToSeed, createSeededRandom } from '../utils/rng'
+import { AUTOTILE_PAIRS, calculateBitmask } from '../utils/autotile-constants'
 import { useCharacterStore } from '../../stores/character'
 import { useExplorationStore } from '../../stores/exploration'
 import type { ChunkFogState } from '../../stores/exploration'
@@ -31,35 +32,19 @@ const FOG_EXPLORED_ALPHA = 0.75
 /** 无出生点时的默认世界坐标（大陆中心附近） */
 const DEFAULT_SPAWN = 325
 
-/** 地形优先级：数值越大越"高"，边缘过渡方向为高优先级向低优先级渐变 */
-const TERRAIN_PRIORITY: Record<string, number> = {
-  water: 0,
-  sand: 1,
-  dirt: 2,
-  grass: 3,
-}
-
-/** 获取地形优先级（未知类型视为最低，避免渲染异常） */
-function terrainPriority(type: string): number {
-  return TERRAIN_PRIORITY[type] ?? 0
-}
-
-/** 判断两个地形类型之间是否需要渲染边缘过渡（仅对视觉差异显著的过渡渲染） */
-function shouldRenderEdge(higherType: string, lowerType: string): boolean {
-  // grass→dirt 差异小，不渲染边缘；其余过渡（到 water/sand）都渲染
-  if (higherType === 'grass' && lowerType === 'dirt') return false
-  return true
-}
-
 interface ChunkLayer {
   /** 该区块的地形 Blitter（每种地形类型每个变体各一个） */
   blitters: Phaser.GameObjects.Blitter[]
   /** blitter 索引映射：type -> [variantStartIndex, variantCount] */
   blitterIndex: Map<string, number>
-  /** 地形边界过渡 Blitter 数组（叠加在 base tile 之上，水面动画之下） */
-  edgeBlitters: Phaser.GameObjects.Blitter[]
+  /** 地形过渡 overlay Blitter（按贴图集纹理 key 缓存复用，叠加在 base tile 之上） */
+  autotileBlitters: Map<string, Phaser.GameObjects.Blitter>
   /** 水面波纹动画 Blitter（可选，仅含 water tile 的区块才有） */
   waterAnim?: Phaser.GameObjects.Blitter
+  /** 森林群系的树木装饰，仅随区块生命周期存在 */
+  forestDecorations: Phaser.GameObjects.GameObject[]
+  /** 荒漠、湿地和高地装饰，仅随区块生命周期存在 */
+  biomeDecorations: Phaser.GameObjects.Graphics[]
   /** 已探索但不可见时的整块半透明迷雾遮罩，undefined 表示无遮罩 */
   fog: Phaser.GameObjects.Graphics | undefined
 }
@@ -264,7 +249,14 @@ export class WorldScene extends Phaser.Scene {
       }
     }
 
-    const layer: ChunkLayer = { blitters, blitterIndex, edgeBlitters: [], fog: undefined }
+    const layer: ChunkLayer = {
+      blitters,
+      blitterIndex,
+      autotileBlitters: new Map(),
+      forestDecorations: [],
+      biomeDecorations: [],
+      fog: undefined,
+    }
     this.chunkLayers.set(chunkId, layer)
     this.populateChunkBobs(chunkId, layer)
   }
@@ -273,10 +265,9 @@ export class WorldScene extends Phaser.Scene {
   private populateChunkBobs(chunkId: string, layer: ChunkLayer): void {
     const { wx: originWX, wy: originWY } = chunkIdToWorldOrigin(chunkId)
     const terrain = getChunkTerrain(chunkId)
-    const chunkSeed = hashStringToSeed(chunkId)
     let hasWater = false
-    /** 需要绘制边缘过渡的 tile：[wx, wy, type, dir[]] */
-    const edgeTiles: Array<{ wx: number; wy: number; type: string; dirs: string[] }> = []
+    /** 需要绘制过渡 overlay 的 tile：[wx, wy, lowType, highType, mask] */
+    const overlayTiles: Array<{ wx: number; wy: number; high: string; low: string; mask: number }> = []
 
     for (let ly = 0; ly < CHUNK_SIZE; ly++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -285,10 +276,16 @@ export class WorldScene extends Phaser.Scene {
         const center = gridToIso(wx, wy)
         const type = terrain[ly][lx]
 
-        // 确定性选择变体：基于 tile 世界坐标哈希
-        // 注意：^ 返回有符号 32 位整数（可能为负），须用 >>> 0 转回无符号再取模
-        const tileHash = (hashStringToSeed(`${wx}_${wy}`) ^ chunkSeed) >>> 0
-        const variant = tileHash % TILE_VARIANT_COUNT
+        // AI 生成的变体色差较大，逐 tile 随机切换会形成明显的棋盘格。
+        // 以单一主变体铺底，避免相邻地块出现硬直线；不同地貌仍由
+        // terrain 类型和 autotile 边缘细节区分。
+        const preferredVariant: Record<string, number> = {
+          grass: 1,
+          dirt: 0,
+          sand: 0,
+          water: 0,
+        }
+        const variant = preferredVariant[type] ?? 0
         const baseIndex = layer.blitterIndex.get(type)
         if (baseIndex === undefined) continue
 
@@ -299,38 +296,47 @@ export class WorldScene extends Phaser.Scene {
 
         if (type === 'water') hasWater = true
 
-        // 检查四个邻居，如果邻居是更低优先级的地形，则当前 tile 需要在该方向绘制边缘过渡
-        // 仅对视觉差异显著的过渡（到 water/sand）渲染，grass→dirt 差异小跳过
-        const dirs: string[] = []
-        const upType = getTileType(wx, wy - 1)
-        const downType = getTileType(wx, wy + 1)
-        const leftType = getTileType(wx - 1, wy)
-        const rightType = getTileType(wx + 1, wy)
-        if (terrainPriority(upType) < terrainPriority(type) && shouldRenderEdge(type, upType)) dirs.push('top')
-        if (terrainPriority(downType) < terrainPriority(type) && shouldRenderEdge(type, downType)) dirs.push('bottom')
-        if (terrainPriority(leftType) < terrainPriority(type) && shouldRenderEdge(type, leftType)) dirs.push('left')
-        if (terrainPriority(rightType) < terrainPriority(type) && shouldRenderEdge(type, rightType)) dirs.push('right')
-        if (dirs.length > 0) edgeTiles.push({ wx, wy, type, dirs })
+        // 从低地形 tile 视角计算与每个高地形邻居的位掩码，
+        // 掩码非零时叠画对应 autotile 子块（高地形向本 tile 的过渡形状）
+        for (const pair of AUTOTILE_PAIRS) {
+          if (pair.low !== type) continue
+          const mask = calculateBitmask(pair.high, (dx, dy) => getTileType(wx + dx, wy + dy))
+          // 单一高地邻居会在草地上形成完整深色方块；只在连续边缘
+          // （至少两个方向相接）时绘制悬崖过渡。
+          const connectedSides = (
+            ((mask & 0x1) !== 0 ? 1 : 0) +
+            ((mask & 0x2) !== 0 ? 1 : 0) +
+            ((mask & 0x4) !== 0 ? 1 : 0) +
+            ((mask & 0x8) !== 0 ? 1 : 0)
+          )
+          if (mask > 0 && (pair.high !== 'dirt' || connectedSides >= 2)) {
+            overlayTiles.push({ wx, wy, high: pair.high, low: type, mask })
+          }
+        }
       }
     }
 
-    // 为每个边缘 tile 的 Bob 填入对应方向贴图的 Blitter（按需创建，缓存复用）
-    if (edgeTiles.length > 0) {
-      /** edge 贴图 key -> Blitter 映射（仅本区块内复用） */
-      const edgeBlitterMap = new Map<string, Phaser.GameObjects.Blitter>()
-      for (const { wx, wy, type, dirs } of edgeTiles) {
-        const center = gridToIso(wx, wy)
-        for (const dir of dirs) {
-          const key = `edge-${type}-${dir}`
-          let blitter = edgeBlitterMap.get(key)
-          if (!blitter) {
-            blitter = this.add.blitter(0, 0, key)
-            blitter.setDepth(TERRAIN_DEPTH + 1)
-            edgeBlitterMap.set(key, blitter)
-            layer.edgeBlitters.push(blitter)
-          }
-          blitter.create(center.x - TILE_WIDTH / 2, center.y - TILE_HEIGHT / 2)
+    // 为每个过渡 tile 叠画对应 autotile 子块（按贴图集纹理 key 缓存 Blitter）
+    if (overlayTiles.length > 0) {
+      for (const { wx, wy, high, low, mask } of overlayTiles) {
+        const textureKey = `autotile-${high}-${low}`
+        let blitter = layer.autotileBlitters.get(textureKey)
+        if (!blitter) {
+          blitter = this.add.blitter(0, 0, textureKey)
+          blitter.setDepth(TERRAIN_DEPTH + 1)
+          // 过渡贴图包含较深的崖边阴影；降低整体不透明度，
+          // 让底层地貌纹理透出，避免形成僵硬的深色直角带。
+          const overlayAlpha = textureKey === 'autotile-grass-sand'
+            ? 0.30
+            : textureKey === 'autotile-dirt-grass'
+              ? 0.72
+              : 0.65
+          blitter.setAlpha(overlayAlpha)
+          layer.autotileBlitters.set(textureKey, blitter)
         }
+        const center = gridToIso(wx, wy)
+        // 帧名 = 位掩码字符串（PreloadScene.registerAutotileFrames 已注册 0..15 帧）
+        blitter.create(center.x - TILE_WIDTH / 2, center.y - TILE_HEIGHT / 2, String(mask))
       }
     }
 
@@ -348,6 +354,72 @@ export class WorldScene extends Phaser.Scene {
         }
       }
       layer.waterAnim = animBlitter
+    }
+
+    // 森林装饰使用低频群系噪声 + 确定性抽样，形成成片树林而不是棋盘格。
+    const decorationRandom = createSeededRandom(hashStringToSeed(`forest_${chunkId}`))
+    for (let ly = 1; ly < CHUNK_SIZE - 1; ly++) {
+      for (let lx = 1; lx < CHUNK_SIZE - 1; lx++) {
+        const wx = originWX + lx
+        const wy = originWY + ly
+        if (terrain[ly][lx] !== 'grass' || !isForestTile(wx, wy)) continue
+        if (decorationRandom() > 0.58) continue
+        const { x, y } = gridToIso(wx, wy)
+        const tree = this.add.image(x, y, 'tree-forest')
+        tree.setOrigin(0.5, 1)
+        tree.setScale(0.78 + decorationRandom() * 0.22)
+        tree.setDepth(y + 2)
+        layer.forestDecorations.push(tree)
+      }
+    }
+
+    const biomeRandom = createSeededRandom(hashStringToSeed(`biomes_${chunkId}`))
+    for (let ly = 1; ly < CHUNK_SIZE - 1; ly++) {
+      for (let lx = 1; lx < CHUNK_SIZE - 1; lx++) {
+        const wx = originWX + lx
+        const wy = originWY + ly
+        const type = terrain[ly][lx]
+        if (biomeRandom() > 0.16) continue
+        const { x, y } = gridToIso(wx, wy)
+        const decoration = this.add.graphics()
+        decoration.setDepth(y + 1)
+
+        if (type === 'sand' && isDesertTile(wx, wy)) {
+          // 荒漠：用小型仙人掌替代单调的整片沙地。
+          decoration.fillStyle(0x4d8a54, 0.95)
+          decoration.fillRect(x - 2, y - 18, 4, 18)
+          decoration.fillRect(x - 7, y - 13, 5, 3)
+          decoration.fillRect(x - 7, y - 16, 3, 6)
+          decoration.fillRect(x + 2, y - 9, 5, 3)
+          decoration.fillRect(x + 4, y - 12, 3, 6)
+          layer.biomeDecorations.push(decoration)
+        } else if (isMarshTile(wx, wy) && type !== 'water') {
+          // 湿地：芦苇簇只出现在草地/沙地边缘，避免遮住水面。
+          decoration.lineStyle(2, 0x567d3f, 0.9)
+          decoration.lineBetween(x - 3, y - 2, x - 4, y - 19)
+          decoration.lineBetween(x, y - 2, x + 1, y - 22)
+          decoration.lineBetween(x + 3, y - 2, x + 5, y - 16)
+          decoration.fillStyle(0x9db85c, 0.9)
+          decoration.fillCircle(x + 1, y - 22, 2)
+          layer.biomeDecorations.push(decoration)
+        } else if (type === 'dirt' && isHighlandTile(wx, wy)) {
+          // 高地：低矮岩块强化台地边缘，不制造新的地形类型。
+          decoration.fillStyle(0x667078, 0.95)
+          decoration.fillEllipse(x, y - 5, 13, 8)
+          decoration.fillStyle(0x8c9798, 0.8)
+          decoration.fillEllipse(x - 2, y - 7, 6, 3)
+          layer.biomeDecorations.push(decoration)
+        } else if (type === 'grass' && isForestTile(wx, wy)) {
+          // 森林边缘的石块景观与服务端 stone 节点配套，石块节点可点击采集。
+          decoration.fillStyle(0x657078, 0.95)
+          decoration.fillEllipse(x, y - 5, 12, 8)
+          decoration.fillStyle(0xa4adb0, 0.8)
+          decoration.fillEllipse(x - 2, y - 7, 5, 3)
+          layer.biomeDecorations.push(decoration)
+        } else {
+          decoration.destroy()
+        }
+      }
     }
   }
 
@@ -426,7 +498,9 @@ export class WorldScene extends Phaser.Scene {
     const layer = this.chunkLayers.get(chunkId)
     if (!layer) return
     for (const blitter of layer.blitters) blitter.destroy()
-    for (const blitter of layer.edgeBlitters) blitter.destroy()
+    for (const blitter of layer.autotileBlitters.values()) blitter.destroy()
+    for (const decoration of layer.forestDecorations) decoration.destroy()
+    for (const decoration of layer.biomeDecorations) decoration.destroy()
     if (layer.waterAnim) layer.waterAnim.destroy()
     if (layer.fog) layer.fog.destroy()
     this.chunkLayers.delete(chunkId)

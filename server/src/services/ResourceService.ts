@@ -28,7 +28,7 @@ export class ResourceService {
   /**
    * Generate initial resource nodes for a chunk.
    * Ocean chunks: coral + deep_mineral (GDD §2.8 海洋区块内容).
-   * Land chunks: wood + stone + mineral (original behavior).
+   * Land chunks: wood is concentrated in forest visuals, plus stone and mineral.
    */
   async generateResourcesForChunk(chunkId: string): Promise<void> {
     try {
@@ -84,12 +84,14 @@ export class ResourceService {
         }
         logger.info(`Generated ocean resources for chunk ${chunkId}`);
       } else {
-        // Land chunk: original behavior
-        const woodCount = 3 + Math.floor(Math.random() * 3);
+        // Land chunk: dense wood supply supports the forest biome.
+        // The client renders the forest trees from the same chunk terrain layer.
+        const woodCount = 8 + Math.floor(Math.random() * 5);
         for (let i = 0; i < woodCount; i++) {
           await this.createResourceNode(chunkId, 'wood');
         }
-        const stoneCount = 2 + Math.floor(Math.random() * 3);
+        // 森林附近也有稳定的石块资源，供玩家在采集木材时顺路获取。
+        const stoneCount = 5 + Math.floor(Math.random() * 4);
         for (let i = 0; i < stoneCount; i++) {
           await this.createResourceNode(chunkId, 'stone');
         }
