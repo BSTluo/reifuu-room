@@ -716,6 +716,48 @@ cd client/reifuu-chat && npm run build
 
 ---
 
+## 6.19 ⭐ 地形整体美化（Phase 5 游戏美化，✅ 前端已完成）
+
+### 6.19.1 功能概述
+
+Phase 5 美化第一步：地形纹理丰富化。每种地形类型（grass/dirt/water/sand）生成 3 个确定性变体，带噪点斑块 + 顶部高光/底部阴影斜面，增加像素画质感与 2.5D 立体感。水面新增 4 帧波纹动画（600ms 循环），增强海洋/岛屿区域的视觉活力。
+
+### 6.19.2 地形纹理变体
+
+- **PreloadScene**（`client/reifuu-chat/src/game/scenes/PreloadScene.ts`）：
+  - `TILE_PALETTES`：每种地形 3 个微调色（亮度/色相偏移）。
+  - `generateTileTextures()`：每变体生成独立贴图 `tile-{type}-{v}`（v=0..2），变体0同时注册为 `tile-{type}` 兼容旧引用。
+  - 噪点斑块：10-18 个随机小方块（2-4px），从同色板取色，alpha 0.55。
+  - 斜面效果：顶部 2px 白色高光（alpha 0.07）+ 底部 2px 黑色阴影（alpha 0.10）。
+  - `TILE_VARIANT_COUNT = 3` 常量需与服务端/客户端一致。
+- **WorldScene**（`client/reifuu-chat/src/game/scenes/WorldScene.ts`）：
+  - `ensureChunkTerrain()`：为每种地形类型创建 3 个 Blitter（共 12 个），`blitterIndex` Map 记录索引。
+  - `populateChunkBobs()`：基于 tile 世界坐标哈希 (`hashStringToSeed(wx_wy) ^ chunkSeed`) 选择变体，同一 tile 在所有客户端上变体一致。
+
+### 6.19.3 水面波纹动画
+
+- **PreloadScene** `generateWaterAnimTextures()`：4 帧贴图 `water-anim-0` .. `water-anim-3`，每帧 3-6 个半透明白色椭圆波纹。
+- **WorldScene**：
+  - `populateChunkBobs()` 在含水域区块创建 `waterAnim` Blitter（depth = TERRAIN_DEPTH + 1），仅 water tile 位置放置 Bob。
+  - `update()` 循环中每 600ms 切换 `waterAnim.setTexture(frameKey)` 到下一帧。
+  - `destroyChunkLayer()` 正确销毁 `waterAnim` Blitter。
+
+### 6.19.4 验证方式
+
+```bash
+cd client/reifuu-chat && npm run build  # 前端构建通过
+cd server && npx tsc --noEmit           # 服务端类型检查通过
+```
+
+### 6.19.5 后续美化方向
+
+- 海洋与岛屿视觉效果增强：沙滩纹理细节、岛屿植物装饰（棕榈树等）。
+- UI 整体质感提升：面板样式、按钮、配色方案、字体。
+- 角色与实体外观：玩家精灵、房屋外观、资源节点。
+- 接入正式美术资源时替换 PreloadScene Graphics 生成贴图（贴图 key 不变即可平滑替换）。
+
+---
+
 ## 7. 测试账号（仍在数据库中）
 
 | 账号 | 密码 | 角色 | 出生区块 | 世界坐标 |

@@ -1,11 +1,16 @@
 import Phaser from 'phaser'
 import { TILE_HEIGHT, TILE_WIDTH } from '../utils/isometric'
+import { hashStringToSeed, createSeededRandom } from '../utils/rng'
 
-const TILE_COLORS: Record<string, number> = {
-  grass: 0x4caf6b,
-  dirt: 0xa0703f,
-  water: 0x4a90d9,
-  sand: 0xe6d5a8,
+/** 每种地形的变体数量（用于纹理丰富度） */
+const TILE_VARIANTS = 3
+
+/** 地形基础色板：每种类型有基色 + 1-2 个变体色（微调亮度/色相） */
+const TILE_PALETTES: Record<string, number[]> = {
+  grass: [0x4caf6b, 0x5cb877, 0x3da05e],
+  dirt: [0xa0703f, 0xb07d4a, 0x94663a],
+  water: [0x4a90d9, 0x5a9fe0, 0x3a80c8],
+  sand: [0xe6d5a8, 0xeadab0, 0xe0d0a0],
 }
 
 /** 资源节点颜色（像素中世纪占位画风，后续替换正式美术） */
@@ -28,6 +33,7 @@ export class PreloadScene extends Phaser.Scene {
 
   preload(): void {
     this.generateTileTextures()
+    this.generateWaterAnimTextures()
     this.generatePlayerTexture()
     this.generateResourceTextures()
     this.generateHouseTextures()
@@ -37,17 +43,82 @@ export class PreloadScene extends Phaser.Scene {
     this.scene.start('WorldScene')
   }
 
+  /**
+   * 生成地形 tile 贴图（每种类型 TILE_VARIANTS 个变体）。
+   * 贴图 key：`tile-{type}`（变体0，兼容旧引用）与 `tile-{type}-{n}`（0..VARIANTS-1）。
+   * 每个变体带轻微噪点纹理 + 内斜面边缘，增强 2.5D 纵深感。
+   */
   private generateTileTextures(): void {
-    for (const [type, color] of Object.entries(TILE_COLORS)) {
-      const key = `tile-${type}`
+    for (const [type, colors] of Object.entries(TILE_PALETTES)) {
+      for (let v = 0; v < TILE_VARIANTS; v++) {
+        // 变体 0 同时注册为 `tile-{type}` 和 `tile-{type}-0`（兼容旧引用）
+        const keys = v === 0 ? [`tile-${type}`, `tile-${type}-0`] : [`tile-${type}-${v}`]
+
+        for (const key of keys) {
+          if (this.textures.exists(key)) continue
+
+          const baseColor = colors[v % colors.length]
+          const random = createSeededRandom(hashStringToSeed(`${type}_${v}`))
+          const g = this.add.graphics()
+
+          // 底色
+          g.fillStyle(baseColor, 1)
+          g.fillRect(0, 0, TILE_WIDTH, TILE_HEIGHT)
+
+          // 噪点斑块（像素画质感）：随机小方块，颜色从同色板取
+          const speckleCount = 10 + Math.floor(random() * 8)
+          for (let i = 0; i < speckleCount; i++) {
+            const sx = Math.floor(random() * (TILE_WIDTH - 6)) + 2
+            const sy = Math.floor(random() * (TILE_HEIGHT - 6)) + 2
+            const size = 2 + Math.floor(random() * 3)
+            const speckleColor = colors[Math.floor(random() * colors.length)]
+            // 只在与基色不同时绘制，避免同色斑块
+            if (speckleColor !== baseColor) {
+              g.fillStyle(speckleColor, 0.55)
+              g.fillRect(sx, sy, size, size)
+            }
+          }
+
+          // 顶部高光 / 底部阴影（微弱斜面，制造立体 tile 感）
+          g.fillStyle(0xffffff, 0.07)
+          g.fillRect(0, 0, TILE_WIDTH, 2)
+          g.fillStyle(0x000000, 0.10)
+          g.fillRect(0, TILE_HEIGHT - 2, TILE_WIDTH, 2)
+
+          // 网格线（极淡，帮助辨识边界）
+          g.lineStyle(1, 0x000000, 0.10)
+          g.strokeRect(0, 0, TILE_WIDTH, TILE_HEIGHT)
+
+          g.generateTexture(key, TILE_WIDTH, TILE_HEIGHT)
+          g.destroy()
+        }
+      }
+    }
+  }
+
+  /**
+   * 生成水面波纹动画帧（4 帧循环），用于 water tile 上层叠加。
+   * 贴图 key：`water-anim-0` .. `water-anim-3`。
+   */
+  private generateWaterAnimTextures(): void {
+    const frames = 4
+    for (let f = 0; f < frames; f++) {
+      const key = `water-anim-${f}`
       if (this.textures.exists(key)) continue
 
       const g = this.add.graphics()
-      g.fillStyle(color, 1)
-      g.fillRect(0, 0, TILE_WIDTH, TILE_HEIGHT)
-      // 轻微网格线，便于辨识 tile 边界
-      g.lineStyle(1, 0x000000, 0.12)
-      g.strokeRect(0, 0, TILE_WIDTH, TILE_HEIGHT)
+      const random = createSeededRandom(hashStringToSeed(`water_anim_${f}`))
+      const waveCount = 3 + f
+
+      for (let i = 0; i < waveCount; i++) {
+        const x = Math.floor(random() * TILE_WIDTH)
+        const y = Math.floor(random() * TILE_HEIGHT)
+        const w = 6 + Math.floor(random() * 12)
+        const h = 2 + Math.floor(random() * 3)
+        // 白色波纹线条，半透明
+        g.fillStyle(0xffffff, 0.08 + random() * 0.06)
+        g.fillEllipse(x + w / 2, y, w, h)
+      }
       g.generateTexture(key, TILE_WIDTH, TILE_HEIGHT)
       g.destroy()
     }

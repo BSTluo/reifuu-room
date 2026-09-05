@@ -5,6 +5,7 @@ import { PlayerSprite } from '../entities/PlayerSprite'
 import { socketClient } from '../network/SocketClient'
 import { gridToIso, isoToGrid, TILE_WIDTH, TILE_HEIGHT } from '../utils/isometric'
 import { CHUNK_SIZE, getChunkTerrain, chunkIdToWorldOrigin, worldToChunkId, getTileType, isIslandChunk, chunkIdToOrigin } from '../utils/world'
+import { hashStringToSeed } from '../utils/rng'
 import { useCharacterStore } from '../../stores/character'
 import { useExplorationStore } from '../../stores/exploration'
 import type { ChunkFogState } from '../../stores/exploration'
@@ -12,6 +13,13 @@ import { apiGet } from '../../api/http'
 import { useUserStore } from '../../stores/user'
 import { useVehicleStore } from '../../stores/vehicle'
 import type { ResourceNodeDTO, ChatRoomDTO, TerrainCapability } from '../../api/types'
+
+/** 每种地形类型的变体数量（须与 PreloadScene TILE_VARIANTS 一致） */
+const TILE_VARIANT_COUNT = 3
+/** 水面波纹动画帧数 */
+const WATER_ANIM_FRAMES = 4
+/** 水面波纹动画间隔（毫秒） */
+const WATER_ANIM_INTERVAL = 600
 
 /** 地形 Blitter 层深度：低于一切实体与迷雾层 */
 const TERRAIN_DEPTH = -10000
@@ -24,8 +32,12 @@ const FOG_EXPLORED_ALPHA = 0.75
 const DEFAULT_SPAWN = 325
 
 interface ChunkLayer {
-  /** 该区块的地形 Blitter（grass + dirt + water 各一个，因 Blitter 绑定单一贴图） */
+  /** 该区块的地形 Blitter（每种地形类型每个变体各一个） */
   blitters: Phaser.GameObjects.Blitter[]
+  /** blitter 索引映射：type -> [variantStartIndex, variantCount] */
+  blitterIndex: Map<string, number>
+  /** 水面波纹动画 Blitter（可选，仅含 water tile 的区块才有） */
+  waterAnim?: Phaser.GameObjects.Blitter
   /** 已探索但不可见时的整块半透明迷雾遮罩，undefined 表示无遮罩 */
   fog: Phaser.GameObjects.Graphics | undefined
 }
@@ -61,6 +73,10 @@ export class WorldScene extends Phaser.Scene {
   private roomSprites = new Map<string, Phaser.GameObjects.Image>()
   /** roomId -> 聊天室数据（当前区块） */
   private roomData = new Map<string, ChatRoomDTO>()
+  /** 水面波纹动画当前帧索引 */
+  private waterAnimFrame = 0
+  /** 水面波纹动画计时器 */
+  private waterAnimTimer = 0
 
   constructor() {
     super('WorldScene')
@@ -159,6 +175,21 @@ export class WorldScene extends Phaser.Scene {
     if (!this.player.isMoving && this.pathToTarget.length === 0) {
       this.handleKeyboardInput()
     }
+
+    // 水面波纹动画：定时切换所有区块的水纹贴图
+    this.waterAnimTimer += delta
+    if (this.waterAnimTimer >= WATER_ANIM_INTERVAL) {
+      this.waterAnimTimer = 0
+      this.waterAnimFrame = (this.waterAnimFrame + 1) % WATER_ANIM_FRAMES
+      const frameKey = `water-anim-${this.waterAnimFrame}`
+      if (this.textures.exists(frameKey)) {
+        this.chunkLayers.forEach((layer) => {
+          if (layer.waterAnim) {
+            layer.waterAnim.setTexture(frameKey)
+          }
+        })
+      }
+    }
   }
 
   shutdown(): void {
@@ -198,23 +229,30 @@ export class WorldScene extends Phaser.Scene {
   private ensureChunkTerrain(chunkId: string): void {
     if (this.chunkLayers.has(chunkId)) return
 
+    const tileTypes = ['grass', 'dirt', 'water', 'sand'] as const
     const blitters: Phaser.GameObjects.Blitter[] = []
-    for (const type of ['grass', 'dirt', 'water'] as const) {
-      const blitter = this.add.blitter(0, 0, `tile-${type}`)
-      blitter.setDepth(TERRAIN_DEPTH)
-      blitters.push(blitter)
+    const blitterIndex = new Map<string, number>()
+
+    for (const type of tileTypes) {
+      blitterIndex.set(type, blitters.length)
+      for (let v = 0; v < TILE_VARIANT_COUNT; v++) {
+        const blitter = this.add.blitter(0, 0, `tile-${type}-${v}`)
+        blitter.setDepth(TERRAIN_DEPTH)
+        blitters.push(blitter)
+      }
     }
 
-    const layer: ChunkLayer = { blitters, fog: undefined }
+    const layer: ChunkLayer = { blitters, blitterIndex, fog: undefined }
     this.chunkLayers.set(chunkId, layer)
     this.populateChunkBobs(chunkId, layer)
   }
 
-  /** 为 chunkId 的三个 Blitter 填充全部 CHUNK_SIZE x CHUNK_SIZE 个 tile Bob */
+  /** 为 chunkId 的所有变体 Blitter 填充 CHUNK_SIZE x CHUNK_SIZE 个 tile Bob */
   private populateChunkBobs(chunkId: string, layer: ChunkLayer): void {
     const { wx: originWX, wy: originWY } = chunkIdToWorldOrigin(chunkId)
     const terrain = getChunkTerrain(chunkId)
-    const [grassBlitter, dirtBlitter, waterBlitter] = layer.blitters
+    const chunkSeed = hashStringToSeed(chunkId)
+    let hasWater = false
 
     for (let ly = 0; ly < CHUNK_SIZE; ly++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -222,10 +260,35 @@ export class WorldScene extends Phaser.Scene {
         const wy = originWY + ly
         const center = gridToIso(wx, wy)
         const type = terrain[ly][lx]
-        const blitter = type === 'grass' ? grassBlitter : type === 'water' ? waterBlitter : dirtBlitter
+
+        // 确定性选择变体：基于 tile 世界坐标哈希
+        const tileHash = hashStringToSeed(`${wx}_${wy}`) ^ chunkSeed
+        const variant = tileHash % TILE_VARIANT_COUNT
+        const baseIndex = layer.blitterIndex.get(type)
+        if (baseIndex === undefined) continue
+
+        const blitter = layer.blitters[baseIndex + variant]
         // Bob 使用左上角原点，tile 绘制区域左上角 = 中心 - (TILE_WIDTH/2, TILE_HEIGHT/2)
         blitter.create(center.x - TILE_WIDTH / 2, center.y - TILE_HEIGHT / 2)
+
+        if (type === 'water') hasWater = true
       }
+    }
+
+    // 如果区块包含水域，创建水面波纹动画 Blitter
+    if (hasWater && !layer.waterAnim) {
+      const animBlitter = this.add.blitter(0, 0, 'water-anim-0')
+      animBlitter.setDepth(TERRAIN_DEPTH + 1)
+      for (let ly = 0; ly < CHUNK_SIZE; ly++) {
+        for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+          if (terrain[ly][lx] !== 'water') continue
+          const wx = originWX + lx
+          const wy = originWY + ly
+          const center = gridToIso(wx, wy)
+          animBlitter.create(center.x - TILE_WIDTH / 2, center.y - TILE_HEIGHT / 2)
+        }
+      }
+      layer.waterAnim = animBlitter
     }
   }
 
@@ -304,6 +367,7 @@ export class WorldScene extends Phaser.Scene {
     const layer = this.chunkLayers.get(chunkId)
     if (!layer) return
     for (const blitter of layer.blitters) blitter.destroy()
+    if (layer.waterAnim) layer.waterAnim.destroy()
     if (layer.fog) layer.fog.destroy()
     this.chunkLayers.delete(chunkId)
   }
