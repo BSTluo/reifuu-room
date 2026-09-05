@@ -4,13 +4,14 @@ import { OtherPlayerSprite } from '../entities/OtherPlayerSprite'
 import { PlayerSprite } from '../entities/PlayerSprite'
 import { socketClient } from '../network/SocketClient'
 import { gridToIso, isoToGrid, TILE_WIDTH, TILE_HEIGHT } from '../utils/isometric'
-import { CHUNK_SIZE, getChunkTerrain, chunkIdToWorldOrigin, worldToChunkId } from '../utils/world'
+import { CHUNK_SIZE, getChunkTerrain, chunkIdToWorldOrigin, worldToChunkId, getTileType } from '../utils/world'
 import { useCharacterStore } from '../../stores/character'
 import { useExplorationStore } from '../../stores/exploration'
 import type { ChunkFogState } from '../../stores/exploration'
 import { apiGet } from '../../api/http'
 import { useUserStore } from '../../stores/user'
-import type { ResourceNodeDTO, ChatRoomDTO } from '../../api/types'
+import { useVehicleStore } from '../../stores/vehicle'
+import type { ResourceNodeDTO, ChatRoomDTO, TerrainCapability } from '../../api/types'
 
 /** 地形 Blitter 层深度：低于一切实体与迷雾层 */
 const TERRAIN_DEPTH = -10000
@@ -23,7 +24,7 @@ const FOG_EXPLORED_ALPHA = 0.75
 const DEFAULT_SPAWN = 325
 
 interface ChunkLayer {
-  /** 该区块的地形 Blitter（grass + dirt 各一个，因 Blitter 绑定单一贴图） */
+  /** 该区块的地形 Blitter（grass + dirt + water 各一个，因 Blitter 绑定单一贴图） */
   blitters: Phaser.GameObjects.Blitter[]
   /** 已探索但不可见时的整块半透明迷雾遮罩，undefined 表示无遮罩 */
   fog: Phaser.GameObjects.Graphics | undefined
@@ -198,7 +199,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.chunkLayers.has(chunkId)) return
 
     const blitters: Phaser.GameObjects.Blitter[] = []
-    for (const type of ['grass', 'dirt'] as const) {
+    for (const type of ['grass', 'dirt', 'water'] as const) {
       const blitter = this.add.blitter(0, 0, `tile-${type}`)
       blitter.setDepth(TERRAIN_DEPTH)
       blitters.push(blitter)
@@ -209,18 +210,19 @@ export class WorldScene extends Phaser.Scene {
     this.populateChunkBobs(chunkId, layer)
   }
 
-  /** 为 chunkId 的两个 Blitter 填充全部 CHUNK_SIZE x CHUNK_SIZE 个 tile Bob */
+  /** 为 chunkId 的三个 Blitter 填充全部 CHUNK_SIZE x CHUNK_SIZE 个 tile Bob */
   private populateChunkBobs(chunkId: string, layer: ChunkLayer): void {
     const { wx: originWX, wy: originWY } = chunkIdToWorldOrigin(chunkId)
     const terrain = getChunkTerrain(chunkId)
-    const [grassBlitter, dirtBlitter] = layer.blitters
+    const [grassBlitter, dirtBlitter, waterBlitter] = layer.blitters
 
     for (let ly = 0; ly < CHUNK_SIZE; ly++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
         const wx = originWX + lx
         const wy = originWY + ly
         const center = gridToIso(wx, wy)
-        const blitter = terrain[ly][lx] === 'grass' ? grassBlitter : dirtBlitter
+        const type = terrain[ly][lx]
+        const blitter = type === 'grass' ? grassBlitter : type === 'water' ? waterBlitter : dirtBlitter
         // Bob 使用左上角原点，tile 绘制区域左上角 = 中心 - (TILE_WIDTH/2, TILE_HEIGHT/2)
         blitter.create(center.x - TILE_WIDTH / 2, center.y - TILE_HEIGHT / 2)
       }
@@ -333,12 +335,32 @@ export class WorldScene extends Phaser.Scene {
     const nextGX = Math.round(current.gridX + dgx)
     const nextGY = Math.round(current.gridY + dgy)
 
-    // 无限世界：无边界/水域检查，所有 tile 均可通行
+    if (!this.canEnterTile(nextGX, nextGY)) return
+
     const { x, y } = gridToIso(nextGX, nextGY)
     this.player.moveTo(x, y)
     EventBus.emit('player:position-changed', { x: nextGX, y: nextGY })
 
     this.sendPlayerMove(nextGX, nextGY)
+  }
+
+  /**
+   * GDD 2.8 地形通行判定：
+   * - 海洋区块（water tile）需要装备船只（terrain_capability='water'）或飞艇（'all'）
+   * - 徒步/马/车无法进入海洋区块
+   * - 飞艇可无视地形
+   */
+  private canEnterTile(gx: number, gy: number): boolean {
+    const tileType = getTileType(gx, gy)
+    if (tileType !== 'water') return true
+    const capability = this.getEquippedTerrainCapability()
+    if (capability === 'water' || capability === 'all') return true
+    return false
+  }
+
+  private getEquippedTerrainCapability(): TerrainCapability | null {
+    const vehicleStore = useVehicleStore()
+    return vehicleStore.equipped?.terrainCapability ?? null
   }
 
   private onPointerDown(pointer: Phaser.Input.Pointer): void {
@@ -358,7 +380,11 @@ export class WorldScene extends Phaser.Scene {
     this.showTargetMarker(targetGX, targetGY)
   }
 
-  /** 曼哈顿贪心寻路：世界坐标下所有 tile 均可通行，无需障碍检测 */
+  /**
+   * 曼哈顿贪心寻路 + 水域绕行：
+   * 优先朝目标走，若下一步不可通行（海洋 tile 且无船），尝试沿垂直方向绕行。
+   * 找不到任何可走方向时返回已计算的部分路径。
+   */
   private findSimplePath(
     startX: number,
     startY: number,
@@ -370,16 +396,27 @@ export class WorldScene extends Phaser.Scene {
     let y = startY
 
     while (x !== targetX || y !== targetY) {
-      if (x < targetX) {
-        x++
-      } else if (x > targetX) {
-        x--
-      } else if (y < targetY) {
-        y++
-      } else if (y > targetY) {
-        y--
+      const candidates: { gx: number; gy: number }[] = []
+      if (x < targetX) candidates.push({ gx: x + 1, gy: y })
+      if (x > targetX) candidates.push({ gx: x - 1, gy: y })
+      if (y < targetY) candidates.push({ gx: x, gy: y + 1 })
+      if (y > targetY) candidates.push({ gx: x, gy: y - 1 })
+      // 绕行方向：与主要移动方向垂直（沿海岸线）
+      const dx = Math.sign(targetX - x)
+      const dy = Math.sign(targetY - y)
+      if (dx !== 0) {
+        candidates.push({ gx: x, gy: y + 1 })
+        candidates.push({ gx: x, gy: y - 1 })
+      } else if (dy !== 0) {
+        candidates.push({ gx: x + 1, gy: y })
+        candidates.push({ gx: x - 1, gy: y })
       }
-      path.push({ gx: x, gy: y })
+
+      const next = candidates.find((c) => this.canEnterTile(c.gx, c.gy))
+      if (!next) break // 被完全围住，走已算出的部分路径
+      x = next.gx
+      y = next.gy
+      path.push(next)
     }
 
     return path

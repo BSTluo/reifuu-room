@@ -7,7 +7,7 @@ import { EventBus } from '../game/EventBus'
 export const useVehicleStore = defineStore('vehicle', {
   state: () => ({ vehicles: [] as VehicleDTO[], equipped: null as VehicleDTO | null, templates: [] as VehicleTemplateDTO[], loading: false }),
   actions: {
-    listen() { EventBus.on('vehicle:equipped', (vehicle) => { this.equipped = vehicle ? this.vehicles.find((item) => item.id === vehicle.id) ?? { ...vehicle, characterId: '', durability: null, equipped: true, createdAt: '' } : null }) },
+    listen() { EventBus.on('vehicle:equipped', (vehicle) => { this.equipped = vehicle ? this.vehicles.find((item) => item.id === vehicle.id) ?? { ...vehicle, characterId: '', waterSpeedMultiplier: null, durability: null, equipped: true, createdAt: '' } : null }) },
     async fetch() {
       const token = useUserStore().accessToken ?? undefined
       const data = await apiGet<{ vehicles: VehicleDTO[]; equipped: VehicleDTO | null }>('/vehicle', token)

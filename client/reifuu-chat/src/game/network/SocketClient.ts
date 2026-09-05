@@ -5,7 +5,7 @@ import type { TownDTO } from '../EventBus'
 
 export interface ServerToClientEvents {
   echo: (payload: unknown) => void
-  'player:move-confirmed': (data: { position: { x: number; y: number }; chunkId: string; equippedVehicle?: { id: number; vehicleType: 'horse' | 'cart'; speedMultiplier: number } | null }) => void
+  'player:move-confirmed': (data: { position: { x: number; y: number }; chunkId: string; equippedVehicle?: { id: number; vehicleType: 'horse' | 'cart' | 'ship' | 'airship'; speedMultiplier: number; terrainCapability: 'land' | 'water' | 'all' } | null }) => void
   'players:in-chunk': (data: { players: Array<{ characterId: string; nickname: string; position: { x: number; y: number } }> }) => void
   'players:position-update': (data: { characterId: string; position: { x: number; y: number } }) => void
   'player:enter-chunk': (data: { characterId: string; nickname: string; position: { x: number; y: number } }) => void

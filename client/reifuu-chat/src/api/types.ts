@@ -66,12 +66,15 @@ export interface InventoryItemDTO {
   itemType: string
   quantity: number
 }
-export type VehicleType = 'horse' | 'cart'
+export type VehicleType = 'horse' | 'cart' | 'ship' | 'airship'
+export type TerrainCapability = 'land' | 'water' | 'all'
 export interface VehicleDTO {
   id: number
   characterId: string
   vehicleType: VehicleType
   speedMultiplier: number
+  terrainCapability: TerrainCapability
+  waterSpeedMultiplier: number | null
   durability: number | null
   equipped: boolean
   createdAt: string
@@ -80,6 +83,9 @@ export interface VehicleTemplateDTO {
   vehicleType: VehicleType
   name: string
   speedMultiplier: number
+  terrainCapability: TerrainCapability
+  waterSpeedMultiplier: number | null
+  capacity: number
   requirements: { itemType: string; quantity: number }[]
 }
 

@@ -454,6 +454,61 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 
 ---
 
+## 6.14 ⭐ 高级交通工具与海洋区块（Phase 4.5：船只/飞艇，✅ 前后端均已完成）
+
+**任务状态**：已完成。GDD §2.8 船只/飞艇跨洲交通 + §2.2 海洋区块地形。
+
+### 6.14.1 数据库变更
+- 迁移 `server/src/db/migrations/006-ocean-advanced-vehicles.sql`：
+  - `map_chunks.chunk_type` 新增 `'ocean'` 枚举值。
+  - `vehicles.vehicle_type` 新增 `'ship'`、`'airship'` 枚举值。
+  - `vehicles` 表新增 `terrain_capability ENUM('land','water','all')`（默认 `'land'`）。
+  - `vehicles` 表新增 `water_speed_multiplier DECIMAL(4,2) NULL`（船只海域速度倍率，仅 ship 使用）。
+- `schema.sql` 已同步上述变更。
+
+### 6.14.2 载具模板（GDD §2.8 规格）
+| 类型 | 速度（陆/海） | 地形能力 | 容量 | 制作成本 |
+|---|---|---|---|---|
+| horse | 150% / — | land | 1 | 木材×50 + 石材×20 |
+| cart | 150% / — | land | 2 | 木材×50 + 石材×20 |
+| ship | 120% / 180% | water | 4 | 木材×100 + 矿物×30 |
+| airship | 200% / 200% | all | 6 | 木材×150 + 矿物×80 + 魔法水晶×5 |
+
+- `VehicleService.TEMPLATES` 包含 4 种模板，`craft` 插入时写入 `terrain_capability` 和 `water_speed_multiplier`。
+- `VehicleService.getEquippedTerrainCapability()` 供 `MovementService` 做通行校验。
+
+### 6.14.3 海洋区块地形系统
+- **服务端**：`MovementService.isOceanChunk(chunkX, chunkY)` — `|chunkX| < 5 || |chunkY| < 5` 为海洋区块（`OCEAN_CHUNK_WIDTH = 5`，GDD 要求洲际 5-10 个连续海洋区块）。
+- **客户端**：`world.ts` 同步 `isOceanChunk` + `OCEAN_CHUNK_WIDTH`。`getChunkTerrain` 对海洋区块生成全 `'water'` tile，陆地区块仍为 grass/dirt。
+- 四大洲按象限分布（PigeonMailService 同款逻辑），海洋区块位于 x≈0 / y≈0 轴带，自然分隔四大洲。
+
+### 6.14.4 移动地形校验
+- **服务端** `MovementService.handlePlayerMove`：
+  - 目标区块为海洋时，检查装备载具 `terrain_capability`；非 `'water'`/`'all'` 则拒绝（403 "需要船只才能通行海洋区块"）。
+  - `getTerrainSpeedMultiplier` 按目标区块地形返回速度倍率：船只在海洋区块用 `water_speed_multiplier`（1.8×），陆地用 `speed_multiplier`（1.2×）。
+- **客户端** `WorldScene`：
+  - `canEnterTile(gx, gy)` 检查目标 tile 是否为 `'water'`，若无船只/飞艇装备则阻止移动。
+  - `movePlayerByGrid` 调用 `canEnterTile` 前置校验。
+  - `findSimplePath` 改为带水域绕行的贪心寻路：遇不可通行 tile 时尝试垂直方向沿海岸线绕行。
+  - 新增 `getEquippedTerrainCapability()` 从 `useVehicleStore` 读取装备载具地形能力。
+
+### 6.14.5 客户端 UI
+- `VehicleCraftPanel.vue` 更新：显示地形能力（陆地/海域/全地形）、海域速度、载客量，支持 4 种模板。
+- `api/types.ts` 新增 `TerrainCapability` 类型，`VehicleDTO`/`VehicleTemplateDTO` 增加 `terrainCapability`、`waterSpeedMultiplier`、`capacity` 字段。
+- `EventBus.ts` / `SocketClient.ts` 载具事件签名扩展为 4 种载具类型 + `terrainCapability`。
+- `WorldScene` 新增 `water` Blitter 层（`tile-water` 纹理已在 `PreloadScene` 中定义，颜色 `0x4a90d9`）。
+
+### 6.14.6 验证方式
+1. 服务端 `tsc --noEmit` 0 错误 ✅
+2. 客户端 `npm run build` 0 错误 ✅
+3. 逻辑验证：徒步玩家接近海洋区块（|chunkX|<5 或 |chunkY|<5）时客户端阻止移动 + 服务端 403 拒绝；装备船只后可通行海洋且速度 180%；飞艇无视地形全速 200%。
+
+### 6.14.7 注意事项
+- `magic_crystal`（飞艇制作材料）暂无资源节点产出途径，后续可加资源节点或管理命令发放。
+- 海洋区块宽度 `OCEAN_CHUNK_WIDTH = 5` 为常量，服务端 `MovementService` 与客户端 `world.ts` 必须保持一致。
+
+---
+
 ## 7. 测试账号（仍在数据库中）
 
 | 账号 | 密码 | 角色 | 出生区块 | 世界坐标 |

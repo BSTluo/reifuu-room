@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS map_chunks (
     chunk_x INT NOT NULL,
     chunk_y INT NOT NULL,
     chunk_id VARCHAR(50) NOT NULL,
-    chunk_type ENUM('empty', 'resource', 'chatroom') DEFAULT 'empty',
+    chunk_type ENUM('empty', 'resource', 'chatroom', 'ocean') DEFAULT 'empty',
     owner_id INT NULL,
     team_id INT NULL,
     is_public BOOLEAN DEFAULT FALSE,
@@ -141,12 +141,14 @@ CREATE TABLE IF NOT EXISTS inventory_items (
     INDEX idx_character (character_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Vehicles (GDD 2.8, Phase 3 horse/cart)
+-- Vehicles (GDD 2.8, Phase 3 horse/cart + Phase 4.5 ship/airship)
 CREATE TABLE IF NOT EXISTS vehicles (
     id INT AUTO_INCREMENT PRIMARY KEY,
     character_id INT NOT NULL,
-    vehicle_type ENUM('horse', 'cart') NOT NULL,
+    vehicle_type ENUM('horse', 'cart', 'ship', 'airship') NOT NULL,
     speed_multiplier DECIMAL(4,2) NOT NULL DEFAULT 1.50,
+    terrain_capability ENUM('land', 'water', 'all') NOT NULL DEFAULT 'land',
+    water_speed_multiplier DECIMAL(4,2) NULL,
     durability INT NULL,
     equipped BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

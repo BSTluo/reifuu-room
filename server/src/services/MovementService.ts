@@ -2,6 +2,7 @@ import { query } from '../db/mysql.js';
 import redisClient, { prefixKey } from '../db/redis.js';
 import logger from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
+import VehicleService from './VehicleService.js';
 
 interface Position {
   x: number;
@@ -17,11 +18,51 @@ interface PlayerPosition {
   timestamp: number;
 }
 
+/** Chunk terrain type: continents are quadrant-based, ocean separates them along the axes. */
+export type ChunkTerrainType = 'land' | 'ocean';
+
+/**
+ * 海洋区块宽度（GDD 2.8: 大洲间由 5-10 个连续海洋区块分隔）。
+ * 区块 ID 形如 "chunkX_chunkY"；大洲按象限划分（PigeonMailService.getContinentOfChunk），
+ * 海洋区块位于 |chunkX| 或 |chunkY| 小于 OCEAN_CHUNK_WIDTH 的轴带。
+ */
+export const OCEAN_CHUNK_WIDTH = 5;
+
+/**
+ * 判断区块是否为海洋区块（服务端权威，客户端 world.ts 用相同算法保持一致）。
+ */
+export function isOceanChunk(chunkX: number, chunkY: number): boolean {
+  return Math.abs(chunkX) < OCEAN_CHUNK_WIDTH || Math.abs(chunkY) < OCEAN_CHUNK_WIDTH;
+}
+
 export class MovementService {
   // Maximum allowed movement distance per update (to prevent teleporting)
   private readonly MAX_MOVE_DISTANCE = 10;
 
-  async getMaxMoveDistance(characterId: string): Promise<number> {
+  /**
+   * 按目标区块地形返回移动上限倍率：
+   * - 船只在海洋区块用 water_speed_multiplier（180%），陆地区块用 speed_multiplier（120%）
+   * - 飞艇全地形 200%
+   * - 徒步/马/车不分地形
+   */
+  async getTerrainSpeedMultiplier(characterId: string, chunkId: string): Promise<number> {
+    const rows: any = await query(
+      'SELECT speed_multiplier, water_speed_multiplier, terrain_capability FROM vehicles WHERE character_id = ? AND equipped = TRUE LIMIT 1',
+      [characterId]
+    );
+    if (!rows.length) return 1;
+    const baseMultiplier = Number(rows[0].speed_multiplier);
+    const capability = rows[0].terrain_capability;
+    if (capability !== 'water') return baseMultiplier;
+    const [cx, cy] = (chunkId || '0_0').split('_').map(Number);
+    if (!isOceanChunk(cx || 0, cy || 0)) return baseMultiplier;
+    return rows[0].water_speed_multiplier !== null && rows[0].water_speed_multiplier !== undefined
+      ? Number(rows[0].water_speed_multiplier)
+      : baseMultiplier;
+  }
+
+  async getMaxMoveDistance(characterId: string, chunkId?: string): Promise<number> {
+    if (chunkId) return this.MAX_MOVE_DISTANCE * (await this.getTerrainSpeedMultiplier(characterId, chunkId));
     const rows: any = await query(
       'SELECT speed_multiplier FROM vehicles WHERE character_id = ? AND equipped = TRUE LIMIT 1',
       [characterId]
@@ -68,7 +109,7 @@ export class MovementService {
     chunkId: string;
     chunkChanged: boolean;
     oldChunkId?: string;
-    equippedVehicle: { id: number; vehicleType: string; speedMultiplier: number } | null;
+    equippedVehicle: { id: number; vehicleType: string; speedMultiplier: number; terrainCapability: string } | null;
   }> {
     try {
       // Get current position from Redis cache
@@ -83,8 +124,8 @@ export class MovementService {
         oldPosition = cached.position;
         oldChunkId = cached.chunkId;
 
-        // Validate movement distance
-        const maxDistance = await this.getMaxMoveDistance(characterId);
+        // Validate movement distance (terrain-aware: ship gets water_speed_multiplier on ocean)
+        const maxDistance = await this.getMaxMoveDistance(characterId, oldChunkId ?? undefined);
         if (oldPosition && this.calculateDistance(oldPosition, newPosition) > maxDistance) {
           logger.warn(`Invalid movement detected for user ${userId}: distance too large`);
           throw new AppError('Invalid movement: distance too large', 400);
@@ -104,7 +145,7 @@ export class MovementService {
         oldPosition = { x: rows[0].grid_x, y: rows[0].grid_y };
         oldChunkId = rows[0].current_chunk_id;
 
-        const maxDistance = await this.getMaxMoveDistance(characterId);
+        const maxDistance = await this.getMaxMoveDistance(characterId, oldChunkId ?? undefined);
         if (oldPosition && this.calculateDistance(oldPosition, newPosition) > maxDistance) {
           logger.warn(`Invalid movement detected for user ${userId}: distance too large`);
           throw new AppError('Invalid movement: distance too large', 400);
@@ -114,6 +155,15 @@ export class MovementService {
       // Calculate new chunk
       const newChunkId = this.getChunkId(newPosition.x, newPosition.y);
       const chunkChanged = oldChunkId !== newChunkId;
+
+      // GDD 2.8 terrain validation: ocean chunks require ship/airship
+      const [newCX, newCY] = newChunkId.split('_').map(Number);
+      if (isOceanChunk(newCX || 0, newCY || 0)) {
+        const capability = await VehicleService.getEquippedTerrainCapability(characterId);
+        if (capability !== 'water' && capability !== 'all') {
+          throw new AppError('需要船只才能通行海洋区块', 403);
+        }
+      }
 
       // Update position in Redis cache
       const playerData: PlayerPosition = {
@@ -144,10 +194,10 @@ export class MovementService {
         chunkChanged,
         equippedVehicle: await (async () => {
           const rows: any = await query(
-            'SELECT id, vehicle_type AS vehicleType, speed_multiplier AS speedMultiplier FROM vehicles WHERE character_id = ? AND equipped = TRUE LIMIT 1',
+            'SELECT id, vehicle_type AS vehicleType, speed_multiplier AS speedMultiplier, terrain_capability AS terrainCapability FROM vehicles WHERE character_id = ? AND equipped = TRUE LIMIT 1',
             [characterId]
           );
-          return rows.length ? { id: Number(rows[0].id), vehicleType: rows[0].vehicleType, speedMultiplier: Number(rows[0].speedMultiplier) } : null;
+          return rows.length ? { id: Number(rows[0].id), vehicleType: rows[0].vehicleType, speedMultiplier: Number(rows[0].speedMultiplier), terrainCapability: rows[0].terrainCapability } : null;
         })(),
         ...(oldChunkId ? { oldChunkId } : {}),
       };

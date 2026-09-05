@@ -54,8 +54,8 @@ export type GameEvents = {
   'resource:node-depleted': { nodeId: number }
   /** 背包已更新（采集/建造后） */
   'inventory:updated': { items: { itemType: string; quantity: number }[] }
-  'vehicle:state': { vehicles: Array<{ id: number; characterId: string; vehicleType: 'horse' | 'cart'; speedMultiplier: number; durability: number | null; equipped: boolean; createdAt: string }>; equipped: { id: number; vehicleType: 'horse' | 'cart'; speedMultiplier: number } | null }
-  'vehicle:equipped': { id: number; vehicleType: 'horse' | 'cart'; speedMultiplier: number } | null
+  'vehicle:state': { vehicles: Array<{ id: number; characterId: string; vehicleType: 'horse' | 'cart' | 'ship' | 'airship'; speedMultiplier: number; terrainCapability: 'land' | 'water' | 'all'; waterSpeedMultiplier: number | null; durability: number | null; equipped: boolean; createdAt: string }>; equipped: { id: number; vehicleType: 'horse' | 'cart' | 'ship' | 'airship'; speedMultiplier: number; terrainCapability: 'land' | 'water' | 'all' } | null }
+  'vehicle:equipped': { id: number; vehicleType: 'horse' | 'cart' | 'ship' | 'airship'; speedMultiplier: number; terrainCapability: 'land' | 'water' | 'all' } | null
   /** 建造完成 → 场景可显示聊天室标记 */
   'build:created': { chunkId: string; chatRoomId: number }
   'build:abandoned': { chunkId: string }
