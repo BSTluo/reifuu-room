@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import PhaserCanvas from '../components/game/PhaserCanvas.vue'
 import Minimap from '../components/game/Minimap.vue'
 import InteriorView from '../components/game/HUD/InteriorView.vue'
+import MobileControls from '../components/game/MobileControls.vue'
 import { EventBus } from '../game/EventBus'
 import { socketClient } from '../game/network/SocketClient'
 import { useUserStore } from '../stores/user'
@@ -21,6 +22,7 @@ import type { BuildTemplateDTO, OwnedChunkDTO } from '../api/types'
 import { registerFriendListeners, useFriendStore } from '../stores/friend'
 import { registerPigeonListeners, usePigeonStore } from '../stores/pigeon'
 import { registerTeamListeners, useTeamStore } from '../stores/team'
+import { useMobile } from '../composables/useMobile'
 
 const userStore = useUserStore()
 const explorationStore = useExplorationStore()
@@ -31,6 +33,7 @@ const interiorStore = useInteriorStore()
 const friendStore = useFriendStore()
 const pigeonStore = usePigeonStore()
 const teamStore = useTeamStore()
+const { isMobile } = useMobile()
 
 const phaserReady = ref(false)
 const lastPosition = ref({ x: 0, y: 0 })
@@ -51,6 +54,9 @@ const ownedChunks = ref<OwnedChunkDTO[]>([])
 const buildForm = ref({ roomName: '' })
 const buildMessage = ref<{ text: string; type: 'info' | 'warn' | 'error' | 'success' } | null>(null)
 const building = ref(false)
+
+// ---- 移动端菜单 ----
+const showMobileMenu = ref(false)
 
 const ITEM_LABELS: Record<string, string> = {
   wood: '木材',
@@ -225,6 +231,18 @@ function movePlayer(dx: number, dy: number) {
   EventBus.emit('ui:move-player', { dx, dy })
 }
 
+function handleMobileAction(action: string) {
+  switch (action) {
+    case 'interact':
+      // Emit E key press for interaction
+      EventBus.emit('game:toast', { message: '交互', type: 'info' })
+      break
+    case 'menu':
+      showMobileMenu.value = !showMobileMenu.value
+      break
+  }
+}
+
 onMounted(() => {
   EventBus.on('phaser:ready', onPhaserReady)
   EventBus.on('player:position-changed', onPositionChanged)
@@ -282,10 +300,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="game-view">
+  <div class="game-view" :class="{ 'is-mobile': isMobile }">
     <div class="game-canvas-wrap">
       <PhaserCanvas />
-      <div class="minimap-overlay">
+      <div class="minimap-overlay" :class="{ 'mobile-minimap': isMobile }">
         <Minimap />
       </div>
       <div v-if="toast" class="toast" :class="`toast-${toast.type}`">
@@ -294,7 +312,9 @@ onBeforeUnmount(() => {
       <!-- 房间内部 UI 覆盖层（进入房间时显示） -->
       <InteriorView v-if="roomStore.inRoom" />
     </div>
-    <div class="side-panel">
+    
+    <!-- 桌面端侧边栏 -->
+    <div v-if="!isMobile" class="side-panel">
       <div class="debug-panel">
         <p>Phaser ready: {{ phaserReady }}</p>
         <p>Position: {{ lastPosition.x.toFixed(0) }}, {{ lastPosition.y.toFixed(0) }}</p>
@@ -414,6 +434,199 @@ onBeforeUnmount(() => {
         <TeamPanel />
       </div>
     </div>
+
+    <!-- 移动端菜单抽屉 -->
+    <Transition name="slide-up">
+      <div v-if="isMobile && showMobileMenu" class="mobile-menu-drawer">
+        <div class="mobile-menu-header">
+          <h3>菜单</h3>
+          <button class="close-drawer-btn" @click="showMobileMenu = false">✕</button>
+        </div>
+        <div class="mobile-menu-content">
+          <div class="mobile-action-grid">
+            <button class="mobile-action-btn" @click="showInventory = !showInventory; showMobileMenu = false">
+              <span class="mobile-btn-icon">🎒</span>
+              <span class="mobile-btn-label">背包</span>
+              <span class="mobile-btn-badge">{{ inventoryStore.usedSlots }}/{{ inventoryStore.capacity }}</span>
+            </button>
+            <button class="mobile-action-btn" @click="openBuildMenu(); showMobileMenu = false">
+              <span class="mobile-btn-icon">🏠</span>
+              <span class="mobile-btn-label">建造</span>
+            </button>
+            <button class="mobile-action-btn" @click="showFriends = !showFriends; showMobileMenu = false">
+              <span class="mobile-btn-icon">👥</span>
+              <span class="mobile-btn-label">好友</span>
+              <span class="mobile-btn-badge">{{ friendStore.friends.length }}</span>
+            </button>
+            <button
+              class="mobile-action-btn"
+              :class="{ 'has-badge': friendStore.unreadRequestCount > 0 }"
+              @click="showMailbox = !showMailbox; showMobileMenu = false"
+            >
+              <span class="mobile-btn-icon">📬</span>
+              <span class="mobile-btn-label">信箱</span>
+              <span v-if="friendStore.unreadRequestCount > 0" class="mail-badge">{{ friendStore.unreadRequestCount }}</span>
+            </button>
+            <button
+              class="mobile-action-btn"
+              :class="{ 'has-badge': pigeonStore.unreadCount > 0 }"
+              @click="showPigeon = !showPigeon; showMobileMenu = false"
+            >
+              <span class="mobile-btn-icon">🕊️</span>
+              <span class="mobile-btn-label">飞鸽</span>
+              <span v-if="pigeonStore.unreadCount > 0" class="mail-badge">{{ pigeonStore.unreadCount }}</span>
+            </button>
+            <button class="mobile-action-btn" @click="showTeam = !showTeam; showMobileMenu = false">
+              <span class="mobile-btn-icon">👥</span>
+              <span class="mobile-btn-label">团队</span>
+              <span v-if="teamStore.inTeam" class="team-badge">{{ teamStore.members.length }}</span>
+            </button>
+          </div>
+          
+          <div class="mobile-status">
+            <p>位置: {{ lastPosition.x.toFixed(0) }}, {{ lastPosition.y.toFixed(0) }}</p>
+            <p>连接: {{ socketStatus }}</p>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 移动端面板（全屏显示） -->
+    <Transition name="slide-up">
+      <div v-if="isMobile && showInventory" class="mobile-panel-overlay">
+        <div class="mobile-panel">
+          <div class="mobile-panel-header">
+            <h3>背包</h3>
+            <button class="close-panel-btn" @click="showInventory = false">✕</button>
+          </div>
+          <div class="mobile-panel-content">
+            <ul v-if="inventoryStore.items.length" class="inventory-list">
+              <li v-for="item in inventoryStore.items" :key="item.itemType">
+                <span>{{ itemLabel(item.itemType) }}</span>
+                <span class="qty">×{{ item.quantity }}</span>
+              </li>
+            </ul>
+            <p v-else class="empty">背包为空，去采集资源吧</p>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <Transition name="slide-up">
+      <div v-if="isMobile && showBuildMenu" class="mobile-panel-overlay">
+        <div class="mobile-panel">
+          <div class="mobile-panel-header">
+            <h3>建造聊天室</h3>
+            <button class="close-panel-btn" @click="showBuildMenu = false">✕</button>
+          </div>
+          <div class="mobile-panel-content">
+            <p class="hint">当前区块：{{ currentChunkId ?? '未知' }}</p>
+            <input
+              v-model="buildForm.roomName"
+              class="room-name-input"
+              placeholder="聊天室名称"
+              maxlength="20"
+            />
+            <div class="template-list">
+              <div v-for="tpl in templates" :key="tpl.template" class="template-item">
+                <div class="template-head">
+                  <span class="template-name">{{ templateLabel(tpl.template) }}</span>
+                  <button
+                    class="build-btn"
+                    :disabled="building"
+                    @click="buildChatRoom(tpl.template)"
+                  >
+                    建造
+                  </button>
+                </div>
+                <div class="template-req">
+                  <span
+                    v-for="req in tpl.requirements"
+                    :key="req.itemType"
+                    class="req"
+                    :class="{ 'req-ok': inventoryStore.quantityOf(req.itemType) >= req.quantity }"
+                  >
+                    {{ itemLabel(req.itemType) }} {{ inventoryStore.quantityOf(req.itemType) }}/{{ req.quantity }}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <p v-if="buildMessage" class="build-msg" :class="`msg-${buildMessage.type}`">
+              {{ buildMessage.text }}
+            </p>
+            <div v-if="ownedChunks.length" class="owned-chunks">
+              <h4>我的领地</h4>
+              <ul>
+                <li v-for="chunk in ownedChunks" :key="chunk.chunkId">
+                  {{ chunk.chunkId }}
+                  <span v-if="chunk.roomName">· {{ chunk.roomName }}</span>
+                  <span class="visibility">{{ chunk.isPublic ? '公开' : '私有' }}</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <Transition name="slide-up">
+      <div v-if="isMobile && showFriends" class="mobile-panel-overlay">
+        <div class="mobile-panel">
+          <div class="mobile-panel-header">
+            <h3>好友</h3>
+            <button class="close-panel-btn" @click="showFriends = false">✕</button>
+          </div>
+          <div class="mobile-panel-content">
+            <FriendListPanel />
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <Transition name="slide-up">
+      <div v-if="isMobile && showMailbox" class="mobile-panel-overlay">
+        <div class="mobile-panel">
+          <div class="mobile-panel-header">
+            <h3>信箱</h3>
+            <button class="close-panel-btn" @click="showMailbox = false">✕</button>
+          </div>
+          <div class="mobile-panel-content">
+            <MailboxPanel />
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <Transition name="slide-up">
+      <div v-if="isMobile && showPigeon" class="mobile-panel-overlay">
+        <div class="mobile-panel">
+          <div class="mobile-panel-header">
+            <h3>飞鸽传书</h3>
+            <button class="close-panel-btn" @click="showPigeon = false">✕</button>
+          </div>
+          <div class="mobile-panel-content">
+            <PigeonMailPanel />
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <Transition name="slide-up">
+      <div v-if="isMobile && showTeam" class="mobile-panel-overlay">
+        <div class="mobile-panel">
+          <div class="mobile-panel-header">
+            <h3>团队</h3>
+            <button class="close-panel-btn" @click="showTeam = false">✕</button>
+          </div>
+          <div class="mobile-panel-content">
+            <TeamPanel />
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 移动端触控控件 -->
+    <MobileControls v-if="isMobile" @action="handleMobileAction" />
 
     <div v-if="selectedPlayer" class="player-info-overlay" @click.self="closePlayerInfo">
       <PlayerInfoCard
@@ -695,5 +908,235 @@ onBeforeUnmount(() => {
 .toast-success {
   border-color: #a5d6a7;
   color: #a5d6a7;
+}
+
+/* Mobile Styles */
+.is-mobile {
+  flex-direction: column;
+}
+
+.is-mobile .game-canvas-wrap {
+  width: 100%;
+  height: 100vh;
+  position: fixed;
+  top: 0;
+  left: 0;
+}
+
+.mobile-minimap {
+  top: 8px;
+  right: 8px;
+  transform: scale(0.8);
+  transform-origin: top right;
+}
+
+/* Mobile Menu Drawer */
+.mobile-menu-drawer {
+  position: fixed;
+  bottom: 140px;
+  left: 0;
+  right: 0;
+  background: #14181c;
+  border-top: 1px solid #3c4b59;
+  border-radius: 16px 16px 0 0;
+  z-index: 150;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.mobile-menu-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid #3c4b59;
+  position: sticky;
+  top: 0;
+  background: #14181c;
+}
+
+.mobile-menu-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #fff;
+}
+
+.close-drawer-btn {
+  background: none;
+  border: none;
+  color: #9fb2c0;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.mobile-menu-content {
+  padding: 12px;
+}
+
+.mobile-action-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.mobile-action-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 8px;
+  background: #2a3540;
+  border: 1px solid #3c4b59;
+  border-radius: 8px;
+  color: #fff;
+  position: relative;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-action-btn:active {
+  background: #35434f;
+  border-color: #4dd0e1;
+}
+
+.mobile-btn-icon {
+  font-size: 24px;
+  margin-bottom: 4px;
+}
+
+.mobile-btn-label {
+  font-size: 12px;
+}
+
+.mobile-btn-badge {
+  font-size: 10px;
+  color: #ffd54f;
+  margin-top: 2px;
+}
+
+.mobile-status {
+  padding: 8px;
+  background: #242f38;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #9fb2c0;
+}
+
+.mobile-status p {
+  margin: 2px 0;
+}
+
+/* Mobile Panel Overlay */
+.mobile-panel-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 200;
+  display: flex;
+  align-items: flex-end;
+}
+
+.mobile-panel {
+  width: 100%;
+  max-height: 85vh;
+  background: #14181c;
+  border-radius: 16px 16px 0 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  border-bottom: 1px solid #3c4b59;
+  position: sticky;
+  top: 0;
+  background: #14181c;
+  border-radius: 16px 16px 0 0;
+}
+
+.mobile-panel-header h3 {
+  margin: 0;
+  font-size: 18px;
+  color: #fff;
+}
+
+.close-panel-btn {
+  background: none;
+  border: none;
+  color: #9fb2c0;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.mobile-panel-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.mobile-panel-content .inventory-list li {
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.mobile-panel-content .room-name-input {
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.mobile-panel-content .template-item {
+  padding: 12px;
+}
+
+.mobile-panel-content .build-btn {
+  padding: 8px 16px;
+  font-size: 14px;
+}
+
+.mobile-panel-content .req {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+/* Slide Up Transition */
+.slide-up-enter-active,
+.slide-up-leave-active {
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+.slide-up-enter-from,
+.slide-up-leave-to {
+  transform: translateY(100%);
+  opacity: 0;
+}
+
+/* Badge styles for mobile */
+.mobile-action-btn .mail-badge,
+.mobile-action-btn .team-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 16px;
+  border-radius: 8px;
+}
+
+.mobile-action-btn .mail-badge {
+  background: #ff5722;
+}
+
+.mobile-action-btn .team-badge {
+  background: #4caf50;
 }
 </style>

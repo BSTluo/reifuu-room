@@ -369,4 +369,21 @@ onBeforeUnmount(() => {
 .plugin-container {
   margin-bottom: 6px;
 }
+
+@media (max-width: 768px) {
+  .chat-input input {
+    padding: 10px 14px;
+    font-size: 16px;
+  }
+
+  .chat-input button {
+    padding: 10px 16px;
+    font-size: 14px;
+  }
+
+  .plugin-btn {
+    padding: 6px 14px;
+    font-size: 13px;
+  }
+}
 </style>

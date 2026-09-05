@@ -4,7 +4,6 @@ import { EventBus } from '../../../game/EventBus'
 import { useRoomStore } from '../../../stores/room'
 import { useInteriorStore } from '../../../stores/interior'
 import { usePluginStore } from '../../../stores/plugin'
-import { useCharacterStore } from '../../../stores/character'
 import { getPluginMeta, type PluginMeta } from './plugins'
 import ChatPanel from './ChatPanel.vue'
 import type { FurnitureCatalogEntryDTO } from '../../../api/types'
@@ -12,7 +11,6 @@ import type { FurnitureCatalogEntryDTO } from '../../../api/types'
 const roomStore = useRoomStore()
 const interiorStore = useInteriorStore()
 const pluginStore = usePluginStore()
-const characterStore = useCharacterStore()
 
 // ---- Plugin UI state ----
 const activePluginId = ref<string | null>(null)
@@ -360,5 +358,127 @@ onBeforeUnmount(() => {
   padding: 8px;
   pointer-events: auto;
   z-index: 35;
+}
+
+/* Mobile Styles */
+@media (max-width: 768px) {
+  .interior-topbar {
+    padding: 6px 8px;
+  }
+  
+  .room-name {
+    font-size: 13px;
+  }
+  
+  .topbar-actions {
+    gap: 4px;
+  }
+  
+  .tool-btn,
+  .exit-btn {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+  
+  .plugin-container {
+    position: fixed;
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-height: 70vh;
+    border-radius: 12px 12px 0 0;
+    z-index: 100;
+  }
+  
+  .plugin-header {
+    padding: 12px;
+    border-bottom: 1px solid #3c4b59;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  
+  .plugin-title {
+    font-size: 16px;
+    font-weight: bold;
+  }
+  
+  .plugin-close-btn {
+    font-size: 20px;
+    padding: 4px 8px;
+  }
+  
+  .chat-panel-wrap {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 45vh;
+    min-height: 200px;
+    border-radius: 12px 12px 0 0;
+    z-index: 90;
+  }
+  
+  .catalog-panel {
+    position: fixed;
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-height: 80vh;
+    border-radius: 12px 12px 0 0;
+    z-index: 100;
+  }
+  
+  .catalog-header {
+    position: sticky;
+    top: 0;
+    background: #1a1f25;
+    padding: 12px;
+    border-bottom: 1px solid #3c4b59;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  
+  .catalog-title {
+    font-size: 16px;
+    font-weight: bold;
+    margin: 0;
+  }
+  
+  .catalog-close-btn {
+    font-size: 20px;
+    padding: 4px 8px;
+  }
+  
+  .catalog-content {
+    padding: 12px;
+    overflow-y: auto;
+    max-height: calc(80vh - 60px);
+  }
+  
+  .catalog-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+  
+  .catalog-item {
+    padding: 12px;
+    font-size: 13px;
+  }
+  
+  .catalog-item-icon {
+    font-size: 24px;
+  }
+  
+  .catalog-item-name {
+    font-size: 12px;
+  }
 }
 </style>
