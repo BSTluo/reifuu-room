@@ -25,6 +25,14 @@ export interface RefreshResponse {
 export type Continent = 'east' | 'south' | 'west' | 'north'
 export type SpawnMethod = 'unowned' | 'public'
 
+export interface SpawnOptionDTO {
+  method: SpawnMethod
+  label: string
+  description: string
+  available: boolean
+  poolSize: number
+}
+
 export interface CharacterAppearanceDTO {
   gender: string
   hair: string

@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import CharacterService from '../services/CharacterService.js';
+import SpawnPointService from '../services/SpawnPointService.js';
 import { authenticate } from '../middleware/auth.js';
 import VehicleService from '../services/VehicleService.js';
 
@@ -7,6 +8,16 @@ const router = Router();
 
 // All character routes require authentication
 router.use(authenticate);
+
+// Get available spawn point options (GDD §2.1 preview for the create flow)
+router.get('/spawn-options', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const options = await SpawnPointService.getSpawnOptions();
+    res.json({ status: 'success', data: options });
+  } catch (error) {
+    next(error);
+  }
+});
 
 // Create character
 router.post('/create', async (req: Request, res: Response, next: NextFunction) => {

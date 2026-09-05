@@ -32,6 +32,9 @@ interface Config {
   logging: {
     level: string;
   };
+  pigeon: {
+    delayScale: number;
+  };
 }
 
 const config: Config = {
@@ -63,6 +66,10 @@ const config: Config = {
   },
   logging: {
     level: process.env.LOG_LEVEL || 'info',
+  },
+  pigeon: {
+    // 飞鸽传书延迟缩放系数（E2E 测试用，默认 1 表示真实延迟）
+    delayScale: parseFloat(process.env.PIGEON_DELAY_SCALE || '1'),
   },
 };
 

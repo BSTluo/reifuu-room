@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { apiGet, apiPost, ApiRequestError } from '../api/http'
-import type { CharacterAppearanceDTO, CharacterDTO, Continent, SpawnMethod } from '../api/types'
+import type { CharacterAppearanceDTO, CharacterDTO, Continent, SpawnMethod, SpawnOptionDTO } from '../api/types'
 import { useUserStore } from './user'
 
 interface CharacterState {
@@ -80,6 +80,10 @@ export const useCharacterStore = defineStore('character', {
     setPosition(x: number, y: number) {
       this.position.x = x
       this.position.y = y
+    },
+    async fetchSpawnOptions(): Promise<SpawnOptionDTO[]> {
+      const userStore = useUserStore()
+      return apiGet<SpawnOptionDTO[]>('/character/spawn-options', userStore.accessToken ?? undefined)
     },
     reset() {
       this.characterId = null

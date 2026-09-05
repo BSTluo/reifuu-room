@@ -11,6 +11,7 @@ export class OtherPlayerSprite extends Phaser.GameObjects.Container {
   private nameText: Phaser.GameObjects.Text
   private targetX: number
   private targetY: number
+  readonly characterId: string
   private readonly moveSpeed = 160 // 像素/秒
 
   constructor(
@@ -18,9 +19,10 @@ export class OtherPlayerSprite extends Phaser.GameObjects.Container {
     x: number,
     y: number,
     nickname: string,
-    private readonly characterId: string
+    characterId: string
   ) {
     super(scene, x, y)
+    this.characterId = characterId
 
     // 角色精灵（使用与本地玩家相同的占位贴图）
     this.sprite = scene.add.sprite(0, 0, 'player-placeholder')
