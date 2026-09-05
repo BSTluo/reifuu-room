@@ -98,47 +98,61 @@ async function generateImage(
     prompt: fullPrompt,
     n: 1,
     size: args.size,
-    response_format: 'b64_json',
   }
 
   if (spec.negativePrompt) {
-    // 部分模型支持 negative_prompt
     body.negative_prompt = spec.negativePrompt
   }
 
   const url = `${args.baseUrl.replace(/\/+$/, '')}/images/generations`
   console.log(`  → POST ${url}`)
 
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
+  // 自动重试：502/503/504/429 等临时错误指数退避重试
+  const maxRetries = 5
+  let lastError: Error | null = null
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
       'Authorization': `Bearer ${args.apiKey}`,
     },
     body: JSON.stringify(body),
   })
 
-  if (!resp.ok) {
+    if (resp.ok) {
+      const json = (await resp.json()) as ImageGenResponse
+      const item = json.data?.[0]
+      if (!item) throw new Error('API 返回空数据')
+
+      if (item.b64_json) {
+        return Buffer.from(item.b64_json, 'base64')
+      }
+
+      if (item.url) {
+        console.log(`  → 下载图片: ${item.url}`)
+        const imgResp = await fetch(item.url)
+        if (!imgResp.ok) throw new Error(`下载图片失败: ${imgResp.status}`)
+        return Buffer.from(await imgResp.arrayBuffer())
+      }
+
+      throw new Error('API 返回数据中无 b64_json 或 url')
+    }
+
     const errText = await resp.text()
-    throw new Error(`API 返回 ${resp.status}: ${errText.substring(0, 500)}`)
+    lastError = new Error(`API 返回 ${resp.status}: ${errText.substring(0, 500)}`)
+
+    if ([429, 502, 503, 504].includes(resp.status) && attempt < maxRetries) {
+      const delay = Math.min(5000 * attempt, 30000)
+      console.log(`  ⚠️ 第 ${attempt}/${maxRetries} 次失败 (${resp.status})，${delay / 1000}s 后重试...`)
+      await new Promise((r) => setTimeout(r, delay))
+      continue
+    }
+
+    throw lastError
   }
 
-  const json = (await resp.json()) as ImageGenResponse
-  const item = json.data?.[0]
-  if (!item) throw new Error('API 返回空数据')
-
-  if (item.b64_json) {
-    return Buffer.from(item.b64_json, 'base64')
-  }
-
-  if (item.url) {
-    console.log(`  → 下载图片: ${item.url}`)
-    const imgResp = await fetch(item.url)
-    if (!imgResp.ok) throw new Error(`下载图片失败: ${imgResp.status}`)
-    return Buffer.from(await imgResp.arrayBuffer())
-  }
-
-  throw new Error('API 返回数据中无 b64_json 或 url')
+  throw lastError ?? new Error('未知错误')
 }
 
 // =====================================================================
