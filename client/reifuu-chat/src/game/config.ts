@@ -2,6 +2,7 @@ import Phaser from 'phaser'
 import { BootScene } from './scenes/BootScene'
 import { PreloadScene } from './scenes/PreloadScene'
 import { WorldScene } from './scenes/WorldScene'
+import { InteriorScene } from './scenes/InteriorScene'
 
 export function createGameConfig(parent: HTMLElement): Phaser.Types.Core.GameConfig {
   return {
@@ -19,6 +20,6 @@ export function createGameConfig(parent: HTMLElement): Phaser.Types.Core.GameCon
       mode: Phaser.Scale.FIT,
       autoCenter: Phaser.Scale.CENTER_BOTH,
     },
-    scene: [BootScene, PreloadScene, WorldScene],
+    scene: [BootScene, PreloadScene, WorldScene, InteriorScene],
   }
 }

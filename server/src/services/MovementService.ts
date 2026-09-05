@@ -21,6 +21,14 @@ export class MovementService {
   // Maximum allowed movement distance per update (to prevent teleporting)
   private readonly MAX_MOVE_DISTANCE = 10;
 
+  async getMaxMoveDistance(characterId: string): Promise<number> {
+    const rows: any = await query(
+      'SELECT speed_multiplier FROM vehicles WHERE character_id = ? AND equipped = TRUE LIMIT 1',
+      [characterId]
+    );
+    return this.MAX_MOVE_DISTANCE * (rows.length ? Number(rows[0].speed_multiplier) : 1);
+  }
+
   /**
    * Calculate chunk ID from grid coordinates
    */
@@ -60,6 +68,7 @@ export class MovementService {
     chunkId: string;
     chunkChanged: boolean;
     oldChunkId?: string;
+    equippedVehicle: { id: number; vehicleType: string; speedMultiplier: number } | null;
   }> {
     try {
       // Get current position from Redis cache
@@ -75,10 +84,12 @@ export class MovementService {
         oldChunkId = cached.chunkId;
 
         // Validate movement distance
-        if (oldPosition && !this.validateMovement(oldPosition, newPosition)) {
+        const maxDistance = await this.getMaxMoveDistance(characterId);
+        if (oldPosition && this.calculateDistance(oldPosition, newPosition) > maxDistance) {
           logger.warn(`Invalid movement detected for user ${userId}: distance too large`);
           throw new AppError('Invalid movement: distance too large', 400);
         }
+
       } else {
         // First movement, fetch from database
         const rows: any = await query(
@@ -92,6 +103,12 @@ export class MovementService {
 
         oldPosition = { x: rows[0].grid_x, y: rows[0].grid_y };
         oldChunkId = rows[0].current_chunk_id;
+
+        const maxDistance = await this.getMaxMoveDistance(characterId);
+        if (oldPosition && this.calculateDistance(oldPosition, newPosition) > maxDistance) {
+          logger.warn(`Invalid movement detected for user ${userId}: distance too large`);
+          throw new AppError('Invalid movement: distance too large', 400);
+        }
       }
 
       // Calculate new chunk
@@ -125,6 +142,13 @@ export class MovementService {
         position: newPosition,
         chunkId: newChunkId,
         chunkChanged,
+        equippedVehicle: await (async () => {
+          const rows: any = await query(
+            'SELECT id, vehicle_type AS vehicleType, speed_multiplier AS speedMultiplier FROM vehicles WHERE character_id = ? AND equipped = TRUE LIMIT 1',
+            [characterId]
+          );
+          return rows.length ? { id: Number(rows[0].id), vehicleType: rows[0].vehicleType, speedMultiplier: Number(rows[0].speedMultiplier) } : null;
+        })(),
         ...(oldChunkId ? { oldChunkId } : {}),
       };
     } catch (error: any) {
@@ -134,6 +158,22 @@ export class MovementService {
       logger.error('Movement handling error', error);
       throw new AppError('Movement failed', 500);
     }
+  }
+
+  /** Authoritative non-walk teleport used by portals and social travel. */
+  async teleportPlayer(
+    userId: string, characterId: string, nickname: string,
+    position: Position, chunkId: string
+  ): Promise<void> {
+    const playerData: PlayerPosition = {
+      userId, characterId, nickname, chunkId, position, timestamp: Date.now(),
+    };
+    await redisClient.setEx(
+      prefixKey(`player:${characterId}:position`),
+      300,
+      JSON.stringify(playerData)
+    );
+    await this.updatePositionInDatabase(characterId, position, chunkId);
   }
 
   /**

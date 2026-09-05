@@ -1,6 +1,8 @@
 import { type Component } from 'vue'
 import MusicPlayer from './MusicPlayer.vue'
 import VideoPlayer from './VideoPlayer.vue'
+import RadioPlayer from './RadioPlayer.vue'
+import CardTable from './CardTable.vue'
 
 /** 插件元数据 */
 export interface PluginMeta {
@@ -26,6 +28,20 @@ export const BUILTIN_PLUGINS: PluginMeta[] = [
     icon: '🎬',
     description: '房间内同步观看 YouTube 视频',
     component: VideoPlayer,
+  },
+  {
+    id: 'radio-fm',
+    name: '收音机',
+    icon: '📻',
+    description: '收听 FM 广播电台',
+    component: RadioPlayer,
+  },
+  {
+    id: 'doudizhu',
+    name: '斗地主',
+    icon: '🃏',
+    description: '多人斗地主纸牌游戏',
+    component: CardTable,
   },
 ]
 

@@ -1,10 +1,11 @@
 import { io, Socket } from 'socket.io-client'
 import { EventBus } from '../EventBus'
-import type { FriendListItemDTO, FriendRequestDTO } from '../../api/types'
+import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO, FurnitureItemDTO } from '../../api/types'
+import type { TownDTO } from '../EventBus'
 
 export interface ServerToClientEvents {
   echo: (payload: unknown) => void
-  'player:move-confirmed': (data: { position: { x: number; y: number }; chunkId: string }) => void
+  'player:move-confirmed': (data: { position: { x: number; y: number }; chunkId: string; equippedVehicle?: { id: number; vehicleType: 'horse' | 'cart'; speedMultiplier: number } | null }) => void
   'players:in-chunk': (data: { players: Array<{ characterId: string; nickname: string; position: { x: number; y: number } }> }) => void
   'players:position-update': (data: { characterId: string; position: { x: number; y: number } }) => void
   'player:enter-chunk': (data: { characterId: string; nickname: string; position: { x: number; y: number } }) => void
@@ -12,6 +13,8 @@ export interface ServerToClientEvents {
   'map:chunk-data': (data: { chunkId: string; tiles: string[][] }) => void
   'map:initial-explored': (data: { chunks: string[] }) => void
   'map:explore': (data: { chunks: string[] }) => void
+  'town:state': (data: { towns: TownDTO[] }) => void
+  'town:teleport-confirmed': (data: { townId: number; name: string; position: { x: number; y: number }; chunkId: string }) => void
   'resource:collected': (data: {
     nodeId: number
     resourceType: string
@@ -22,6 +25,7 @@ export interface ServerToClientEvents {
   'room:history': (data: { roomId: string; messages: Array<{ id: number; roomId: string; characterId: string; nickname: string; content: string; createdAt: string }> }) => void
   'room:message': (data: { roomId: string; message: { id: number; roomId: string; characterId: string; nickname: string; content: string; createdAt: string } }) => void
   'room:members': (data: { roomId: string; members: Array<{ characterId: string; nickname: string }> }) => void
+  'room:member-removed': (data: { roomId: string }) => void
   // Plugin events (server -> client)
   'plugin:activated': (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => void
   'plugin:deactivated': (data: { roomId: string; pluginId: string }) => void
@@ -35,6 +39,26 @@ export interface ServerToClientEvents {
   'friend:rejected': (data: { requestId: number }) => void
   'friend:removed': (data: { characterId: string }) => void
   'friend:teleport-confirmed': (data: { characterId: string; nickname: string; position: { x: number; y: number }; chunkId: string }) => void
+  // Pigeon mail events (server -> client)
+  'pigeon:state': (data: { messages: PigeonMessageDTO[]; unreadCount: number }) => void
+  'pigeon:sent': (data: { messageId: number; toCharacterId: string; toNickname: string; delayMs: number; delivered: boolean }) => void
+  'pigeon:delivered': (data: { messageId: number; fromCharacterId: string; fromNickname: string; content: string; createdAt: string }) => void
+  'pigeon:read-confirmed': (data: { messageId: number; unreadCount: number }) => void
+  // Team events (server -> client)
+  'team:state': (data: TeamStateDTO) => void
+  'team:invite-received': (data: { invitationId: number; teamId: number; teamName: string; fromNickname: string }) => void
+  'team:application-received': (data: { applicationId: number; teamId: number; teamName: string; characterId: string; nickname: string; message: string | null }) => void
+  'team:applications': (data: TeamApplicationDTO[]) => void
+  'team:invitations': (data: TeamInvitationDTO[]) => void
+  'team:applied': (data: { teamId: number; teamName: string }) => void
+  'team:member-joined': (data: { teamId: number; characterId: string; nickname: string }) => void
+  'team:member-left': (data: { teamId: number; characterId: string; nickname: string }) => void
+  'team:kicked': (data: { teamId: number; teamName: string }) => void
+  'team:disbanded': (data: { teamId: number; teamName: string }) => void
+  'team:chat-message': (data: TeamChatMessageDTO) => void
+  // Furniture events (server -> client)
+  'room:furniture': (data: { roomId: string; furniture: FurnitureItemDTO[] }) => void
+  'room:furniture-changed': (data: { roomId: string; action: 'placed' | 'moved' | 'removed'; furniture: FurnitureItemDTO }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -46,6 +70,7 @@ export interface ClientToServerEvents {
   'room:join': (data: { roomId: string }) => void
   'room:leave': (data: { roomId: string }) => void
   'room:message': (data: { roomId: string; content: string }) => void
+  'room:membership-refresh': (data: { roomId: string; removedCharacterId?: string }) => void
   // Plugin events (client -> server)
   'plugin:activate': (data: { roomId: string; pluginId: string }) => void
   'plugin:deactivate': (data: { roomId: string; pluginId: string }) => void
@@ -57,6 +82,29 @@ export interface ClientToServerEvents {
   'friend:reject-request': (data: { requestId: number }) => void
   'friend:remove': (data: { characterId: string }) => void
   'friend:teleport': (data: { characterId: string }) => void
+  // Pigeon mail events (client -> server)
+  'pigeon:request-state': () => void
+  'pigeon:send': (data: { toCharacterId: string; content: string }) => void
+  'pigeon:mark-read': (data: { messageId: number }) => void
+  // Team events (client -> server)
+  'team:request-state': () => void
+  'team:create': (data: { name: string }) => void
+  'team:invite': (data: { characterId: string }) => void
+  'team:apply': (data: { teamId: number; message?: string }) => void
+  'team:accept-invite': (data: { invitationId: number }) => void
+  'team:reject-invite': (data: { invitationId: number }) => void
+  'team:accept-application': (data: { applicationId: number }) => void
+  'team:reject-application': (data: { applicationId: number }) => void
+  'team:kick': (data: { characterId: string }) => void
+  'team:leave': () => void
+  'team:transfer': (data: { characterId: string }) => void
+  'team:disband': () => void
+  'team:chat': (data: { content: string }) => void
+  'town:request-state': () => void
+  'town:teleport': (data: { townId: number }) => void
+  // Furniture events (client -> server)
+  'room:furniture-request': (data: { roomId: string }) => void
+  'room:furniture-changed': (data: { roomId: string; action: 'placed' | 'moved' | 'removed'; furniture: FurnitureItemDTO }) => void
   [event: string]: (...args: any[]) => void
 }
 
@@ -93,6 +141,9 @@ class SocketClient {
     this.socket.on('connect', () => {
       EventBus.emit('socket:connected')
     })
+    this.socket.on('player:move-confirmed', (data) => {
+      EventBus.emit('vehicle:equipped', data.equippedVehicle ?? null)
+    })
 
     // 迷雾：初始已探索列表 + 新探索区块
     this.socket.on('map:initial-explored', (data: { chunks: string[] }) => {
@@ -101,6 +152,8 @@ class SocketClient {
     this.socket.on('map:explore', (data: { chunks: string[] }) => {
       EventBus.emit('map:explore', data)
     })
+    this.socket.on('town:state', (data) => EventBus.emit('town:state', data))
+    this.socket.on('town:teleport-confirmed', (data) => EventBus.emit('town:teleport-confirmed', data))
 
     // 资源/背包：服务端确认采集 → EventBus 通知场景与 UI
     this.socket.on(
@@ -128,6 +181,9 @@ class SocketClient {
     this.socket.on('room:members', (data: { roomId: string; members: Array<{ characterId: string; nickname: string }> }) => {
       EventBus.emit('room:members', data)
     })
+    this.socket.on('room:member-removed', (data: { roomId: string }) => {
+      EventBus.emit('room:member-removed', data)
+    })
 
     // Plugin events: activated, deactivated, state sync, plugin list
     this.socket.on('plugin:activated', (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => {
@@ -141,6 +197,14 @@ class SocketClient {
     })
     this.socket.on('plugin:list', (data: { roomId: string; plugins: Array<{ pluginId: string; state: Record<string, unknown> }> }) => {
       EventBus.emit('plugin:list', data)
+    })
+
+    // Furniture events: forward to EventBus for the interior store / scene
+    this.socket.on('room:furniture', (data: { roomId: string; furniture: FurnitureItemDTO[] }) => {
+      EventBus.emit('room:furniture', data)
+    })
+    this.socket.on('room:furniture-changed', (data: { roomId: string; action: 'placed' | 'moved' | 'removed'; furniture: FurnitureItemDTO }) => {
+      EventBus.emit('room:furniture-changed', data)
     })
 
     // Friend events: forward to EventBus for the friend store / UI
@@ -164,6 +228,55 @@ class SocketClient {
     })
     this.socket.on('friend:teleport-confirmed', (data: { characterId: string; nickname: string; position: { x: number; y: number }; chunkId: string }) => {
       EventBus.emit('friend:teleport-confirmed', data)
+    })
+
+    // Pigeon mail events: forward to EventBus for the pigeon store / UI
+    this.socket.on('pigeon:state', (data: { messages: PigeonMessageDTO[]; unreadCount: number }) => {
+      EventBus.emit('pigeon:state', data)
+    })
+    this.socket.on('pigeon:sent', (data: { messageId: number; toCharacterId: string; toNickname: string; delayMs: number; delivered: boolean }) => {
+      EventBus.emit('pigeon:sent', data)
+    })
+    this.socket.on('pigeon:delivered', (data: { messageId: number; fromCharacterId: string; fromNickname: string; content: string; createdAt: string }) => {
+      EventBus.emit('pigeon:delivered', data)
+    })
+    this.socket.on('pigeon:read-confirmed', (data: { messageId: number; unreadCount: number }) => {
+      EventBus.emit('pigeon:read-confirmed', data)
+    })
+
+    // Team events: forward to EventBus for the team store / UI
+    this.socket.on('team:state', (data: TeamStateDTO) => {
+      EventBus.emit('team:state', data)
+    })
+    this.socket.on('team:invite-received', (data: { invitationId: number; teamId: number; teamName: string; fromNickname: string }) => {
+      EventBus.emit('team:invite-received', data)
+    })
+    this.socket.on('team:application-received', (data: { applicationId: number; teamId: number; teamName: string; characterId: string; nickname: string; message: string | null }) => {
+      EventBus.emit('team:application-received', data)
+    })
+    this.socket.on('team:applications', (data: TeamApplicationDTO[]) => {
+      EventBus.emit('team:applications', data)
+    })
+    this.socket.on('team:invitations', (data: TeamInvitationDTO[]) => {
+      EventBus.emit('team:invitations', data)
+    })
+    this.socket.on('team:applied', (data: { teamId: number; teamName: string }) => {
+      EventBus.emit('team:applied', data)
+    })
+    this.socket.on('team:member-joined', (data: { teamId: number; characterId: string; nickname: string }) => {
+      EventBus.emit('team:member-joined', data)
+    })
+    this.socket.on('team:member-left', (data: { teamId: number; characterId: string; nickname: string }) => {
+      EventBus.emit('team:member-left', data)
+    })
+    this.socket.on('team:kicked', (data: { teamId: number; teamName: string }) => {
+      EventBus.emit('team:kicked', data)
+    })
+    this.socket.on('team:disbanded', (data: { teamId: number; teamName: string }) => {
+      EventBus.emit('team:disbanded', data)
+    })
+    this.socket.on('team:chat-message', (data: TeamChatMessageDTO) => {
+      EventBus.emit('team:chat-message', data)
     })
 
     this.socket.on('disconnect', (reason) => {

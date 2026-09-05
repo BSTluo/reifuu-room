@@ -2,6 +2,7 @@ import { query } from '../db/mysql.js';
 import logger from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
 import InventoryService from './InventoryService.js';
+import TeamService from './TeamService.js';
 
 interface BuildTemplate {
   template: 'wooden_house' | 'stone_house' | 'advanced_house';
@@ -35,8 +36,6 @@ const BUILD_TEMPLATES: Record<string, BuildTemplate> = {
 };
 
 export class BuildService {
-  private readonly MAX_CHUNKS_PER_PLAYER = 10;
-
   /**
    * Build a chat room on a chunk
    */
@@ -53,14 +52,20 @@ export class BuildService {
         throw new AppError('Invalid build template', 400);
       }
 
-      // Check chunk ownership limit
-      const ownedChunks: any = await query(
-        'SELECT COUNT(*) as count FROM map_chunks WHERE owner_id = ?',
-        [characterId]
-      );
+      // Chunk ownership limit: team-aware (GDD 2.9 团队地块上限).
+      // If the builder is in a team, personal + team chunks share one pool
+      // with the team's limit (10 base, grows with member count); otherwise
+      // the personal limit of 10 applies.
+      const { limit, teamId } = await TeamService.getChunkLimitForCharacter(characterId);
+      const ownedChunks: any = teamId
+        ? await TeamService.getTeamChunkUsage(teamId)
+        : await query('SELECT COUNT(*) as count FROM map_chunks WHERE owner_id = ?', [
+            characterId,
+          ]);
 
-      if (ownedChunks[0]?.count >= this.MAX_CHUNKS_PER_PLAYER) {
-        throw new AppError(`Maximum ${this.MAX_CHUNKS_PER_PLAYER} chunks per player`, 400);
+      const usedCount = Array.isArray(ownedChunks) ? ownedChunks[0]?.count : ownedChunks;
+      if (usedCount >= limit) {
+        throw new AppError(`Maximum ${limit} chunks per player`, 400);
       }
 
       // Check if chunk already has a building
@@ -92,18 +97,18 @@ export class BuildService {
       const [chunkX, chunkY] = chunkId.split('_').map(Number);
 
       if (existingChunk.length === 0) {
-        // Create new chunk entry
+        // Create new chunk entry (team_id set when builder is in a team)
         await query(
-          `INSERT INTO map_chunks (chunk_id, chunk_x, chunk_y, chunk_type, owner_id, is_public)
-           VALUES (?, ?, ?, 'chatroom', ?, FALSE)`,
-          [chunkId, chunkX, chunkY, characterId]
+          `INSERT INTO map_chunks (chunk_id, chunk_x, chunk_y, chunk_type, owner_id, is_public, team_id)
+           VALUES (?, ?, ?, 'chatroom', ?, FALSE, ?)`,
+          [chunkId, chunkX, chunkY, characterId, teamId]
         );
       } else {
         // Update existing chunk
         await query(
-          `UPDATE map_chunks SET chunk_type = 'chatroom', owner_id = ?, is_public = FALSE
+          `UPDATE map_chunks SET chunk_type = 'chatroom', owner_id = ?, is_public = FALSE, team_id = ?
            WHERE chunk_id = ?`,
-          [characterId, chunkId]
+          [characterId, teamId, chunkId]
         );
       }
 
@@ -115,6 +120,11 @@ export class BuildService {
       );
 
       const chatRoomId = result.insertId;
+      await query(
+        `INSERT INTO room_members (room_id, character_id, role, status)
+         VALUES (?, ?, 'owner', 'active')`,
+        [chatRoomId, characterId],
+      );
 
       logger.info(`Character ${characterId} built ${template} at chunk ${chunkId}`);
 

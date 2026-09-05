@@ -78,7 +78,7 @@ export class WorldScene extends Phaser.Scene {
     this.currentChunkId = characterStore.currentChunkId ?? worldToChunkId(worldX, worldY)
 
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1)
-    this.cameras.main.setZoom(1.2)
+    this.cameras.main.setZoom(1.0)
     this.cameras.main.setBackgroundColor('#1d2b34')
 
     this.cursors = this.input.keyboard!.createCursorKeys()
@@ -102,6 +102,7 @@ export class WorldScene extends Phaser.Scene {
 
     EventBus.on('ui:move-player', this.onUIMovePlayer)
     EventBus.on('ui:spawn-character', this.onUISpawnCharacter)
+    EventBus.on('ui:request-scene', this.onRequestScene)
     EventBus.on('exploration:updated', this.onExplorationUpdated)
     EventBus.on('resource:collected', this.onResourceCollected)
     EventBus.on('resource:node-depleted', this.onResourceNodeDepleted)
@@ -109,6 +110,7 @@ export class WorldScene extends Phaser.Scene {
     EventBus.on('player:chunk-changed', this.onPlayerChunkChangedForRooms)
     EventBus.on('build:created', this.onBuildCreated)
     EventBus.on('friend:teleport-confirmed', this.onFriendTeleportConfirmed)
+    EventBus.on('town:teleport-confirmed', this.onTownTeleportConfirmed)
 
     // 若 socket 尚未推送初始已探索列表（如重连复用旧 socket），通过 REST 兜底拉取
     if (!explorationStore.initialized) {
@@ -161,6 +163,7 @@ export class WorldScene extends Phaser.Scene {
     this.input.off('pointerdown', this.onPointerDown, this)
     EventBus.off('ui:move-player', this.onUIMovePlayer)
     EventBus.off('ui:spawn-character', this.onUISpawnCharacter)
+    EventBus.off('ui:request-scene', this.onRequestScene)
     EventBus.off('exploration:updated', this.onExplorationUpdated)
     EventBus.off('socket:connected', this.onSocketConnected)
     EventBus.off('resource:collected', this.onResourceCollected)
@@ -169,10 +172,21 @@ export class WorldScene extends Phaser.Scene {
     EventBus.off('player:chunk-changed', this.onPlayerChunkChangedForRooms)
     EventBus.off('build:created', this.onBuildCreated)
     EventBus.off('friend:teleport-confirmed', this.onFriendTeleportConfirmed)
+    EventBus.off('town:teleport-confirmed', this.onTownTeleportConfirmed)
     this.cleanupMultiplayerSync()
     this.clearResourceSprites()
     this.clearRoomSprites()
     this.destroyAllChunks()
+  }
+
+  // ==================== 场景切换 ====================
+
+  /** UI 请求切换场景（进入房间内部 / 返回大世界） */
+  private onRequestScene = (payload: { sceneKey: string }): void => {
+    if (payload.sceneKey === 'InteriorScene') {
+      // 停止世界场景（shutdown 会自动调用），启动室内场景
+      this.scene.start('InteriorScene')
+    }
   }
 
   // ==================== 区块渲染 ====================
@@ -198,8 +212,6 @@ export class WorldScene extends Phaser.Scene {
     const { wx: originWX, wy: originWY } = chunkIdToWorldOrigin(chunkId)
     const terrain = getChunkTerrain(chunkId)
     const [grassBlitter, dirtBlitter] = layer.blitters
-    const halfW = TILE_WIDTH / 2
-    const halfH = TILE_HEIGHT / 2
 
     for (let ly = 0; ly < CHUNK_SIZE; ly++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -207,8 +219,8 @@ export class WorldScene extends Phaser.Scene {
         const wy = originWY + ly
         const center = gridToIso(wx, wy)
         const blitter = terrain[ly][lx] === 'grass' ? grassBlitter : dirtBlitter
-        // Bob 使用左上角原点，tile 菱形中心在贴图 (halfW, halfH) 处
-        blitter.create(center.x - halfW, center.y - halfH)
+        // Bob 使用左上角原点，tile 绘制区域左上角 = 中心 - (TILE_WIDTH/2, TILE_HEIGHT/2)
+        blitter.create(center.x - TILE_WIDTH / 2, center.y - TILE_HEIGHT / 2)
       }
     }
   }
@@ -262,27 +274,24 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  /** 绘制整块大菱形迷雾遮罩（四个角落 tile 中心 ± 半 tile 延伸） */
+  /** 绘制整块矩形迷雾遮罩（覆盖整个区块的 tile 范围） */
   private buildFogOverlay(chunkId: string): Phaser.GameObjects.Graphics {
     const { wx: originWX, wy: originWY } = chunkIdToWorldOrigin(chunkId)
     const n = CHUNK_SIZE - 1
     const halfW = TILE_WIDTH / 2
     const halfH = TILE_HEIGHT / 2
 
-    const top = gridToIso(originWX, originWY)
-    const right = gridToIso(originWX + n, originWY)
-    const bottom = gridToIso(originWX + n, originWY + n)
-    const left = gridToIso(originWX, originWY + n)
+    const topLeft = gridToIso(originWX, originWY)
+    const bottomRight = gridToIso(originWX + n, originWY + n)
 
     const g = this.add.graphics()
     g.fillStyle(FOG_EXPLORED_COLOR, FOG_EXPLORED_ALPHA)
-    g.beginPath()
-    g.moveTo(top.x, top.y - halfH)
-    g.lineTo(right.x + halfW, right.y)
-    g.lineTo(bottom.x, bottom.y + halfH)
-    g.lineTo(left.x - halfW, left.y)
-    g.closePath()
-    g.fillPath()
+    g.fillRect(
+      topLeft.x - halfW,
+      topLeft.y - halfH,
+      bottomRight.x - topLeft.x + TILE_WIDTH,
+      bottomRight.y - topLeft.y + TILE_HEIGHT,
+    )
     g.setDepth(FOG_DEPTH)
     return g
   }
@@ -380,7 +389,7 @@ export class WorldScene extends Phaser.Scene {
     const { x, y } = gridToIso(gx, gy)
     this.targetMarker = this.add.graphics()
     this.targetMarker.lineStyle(2, 0xffff00, 0.8)
-    this.targetMarker.strokeCircle(x, y, 12)
+    this.targetMarker.strokeCircle(x, y, TILE_WIDTH * 0.4)
     this.targetMarker.setDepth(10000)
 
     this.tweens.add({
@@ -550,6 +559,11 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
+  private onTownTeleportConfirmed = (data: { townId: number; name: string; position: { x: number; y: number }; chunkId: string }) => {
+    this.onFriendTeleportConfirmed({ characterId: '', nickname: data.name, position: data.position, chunkId: data.chunkId })
+    EventBus.emit('game:toast', { message: `已传送至 ${data.name}`, type: 'success' })
+  }
+
   // ==================== 聊天室房屋 ====================
 
   /** 玩家进入新区块时加载该区块的聊天室房屋 */
@@ -600,7 +614,8 @@ export class WorldScene extends Phaser.Scene {
     const cy = originWY + 7
     const { x, y } = gridToIso(cx, cy)
     const textureKey = `house-${room.template}`
-    const sprite = this.add.image(x, y - 16, textureKey)
+    const sprite = this.add.image(x, y, textureKey)
+    sprite.setOrigin(0.5, 1)
     sprite.setDepth(y + 2)
     sprite.setInteractive({ useHandCursor: true })
     sprite.on('pointerdown', () => this.onRoomMarkerClick(room))
@@ -654,7 +669,8 @@ export class WorldScene extends Phaser.Scene {
     const { x: worldX, y: worldY } = node.position
     const { x, y } = gridToIso(worldX, worldY)
     const textureKey = node.isDepleted ? `resource-${node.resourceType}-depleted` : `resource-${node.resourceType}`
-    const sprite = this.add.image(x, y - 8, textureKey)
+    const sprite = this.add.image(x, y, textureKey)
+    sprite.setOrigin(0.5, 1)
     sprite.setDepth(y + 1)
     sprite.setInteractive({ useHandCursor: true })
     sprite.on('pointerdown', () => this.onResourceNodeClick(node))

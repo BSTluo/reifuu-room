@@ -23,6 +23,7 @@ export interface RefreshResponse {
 }
 
 export type Continent = 'east' | 'south' | 'west' | 'north'
+export type SpawnMethod = 'unowned' | 'public'
 
 export interface CharacterAppearanceDTO {
   gender: string
@@ -36,8 +37,10 @@ export interface CharacterDTO {
   nickname: string
   appearance: CharacterAppearanceDTO
   continent: Continent
+  spawnMethod: SpawnMethod
   currentChunkId: string
   position: { x: number; y: number }
+  equippedVehicle?: VehicleDTO | null
 }
 
 export type ResourceType = 'wood' | 'stone' | 'mineral'
@@ -54,6 +57,22 @@ export interface ResourceNodeDTO {
 export interface InventoryItemDTO {
   itemType: string
   quantity: number
+}
+export type VehicleType = 'horse' | 'cart'
+export interface VehicleDTO {
+  id: number
+  characterId: string
+  vehicleType: VehicleType
+  speedMultiplier: number
+  durability: number | null
+  equipped: boolean
+  createdAt: string
+}
+export interface VehicleTemplateDTO {
+  vehicleType: VehicleType
+  name: string
+  speedMultiplier: number
+  requirements: { itemType: string; quantity: number }[]
 }
 
 export interface BuildTemplateDTO {
@@ -77,6 +96,8 @@ export interface ChatRoomDTO {
   template: string
   ownerId: string
   ownerNickname?: string
+  isPublic?: boolean
+  role?: 'owner' | 'member' | null
 }
 
 export interface ChatMessageDTO {
@@ -91,6 +112,47 @@ export interface ChatMessageDTO {
 export interface RoomMemberDTO {
   characterId: string
   nickname: string
+  role?: 'owner' | 'member'
+  status?: 'active' | 'removed'
+  joinedAt?: string
+}
+
+export interface RoomInvitationDTO {
+  id: number
+  roomId: string
+  fromCharacterId: string
+  fromNickname: string
+  createdAt: string
+  roomName?: string
+}
+
+export interface RoomMembershipStateDTO {
+  isPublic: boolean
+  role: 'owner' | 'member' | null
+  members: RoomMemberDTO[]
+  invitations: RoomInvitationDTO[]
+}
+
+// ---- House interior (furniture) DTOs ----
+
+export interface FurnitureItemDTO {
+  id: string
+  type: string
+  x: number
+  y: number
+  rotation: number
+  placedBy: string
+  createdAt: number
+}
+
+export interface FurnitureCatalogEntryDTO {
+  type: string
+  name: string
+  icon: string
+  width: number
+  height: number
+  pluginId: string | null
+  memberPlaceable: boolean
 }
 
 // ---- Friend system DTOs ----
@@ -122,4 +184,94 @@ export interface FriendTeleportResultDTO {
   nickname: string
   position: { x: number; y: number }
   chunkId: string
+}
+
+// ---- Pigeon mail (飞鸽传信) DTOs ----
+
+export type PigeonMessageStatus = 'sending' | 'delivered' | 'read'
+
+export interface PigeonMessageDTO {
+  id: number
+  fromCharacterId: string
+  fromNickname: string
+  toCharacterId: string
+  toNickname: string
+  content: string
+  status: PigeonMessageStatus
+  deliverAt: string | null
+  createdAt: string
+}
+
+export interface PigeonSendResultDTO {
+  messageId: number
+  toNickname: string
+  delayMs: number
+  delivered: boolean
+}
+
+// ---- Team system (团队系统) DTOs ----
+
+export type TeamRole = 'leader' | 'member'
+
+export interface TeamDTO {
+  teamId: number
+  name: string
+  leaderCharacterId: string
+  leaderNickname: string
+  createdAt: string
+}
+
+export interface TeamMemberDTO {
+  characterId: string
+  nickname: string
+  role: TeamRole
+  isOnline: boolean
+  joinedAt: string
+}
+
+export interface TeamInvitationDTO {
+  id: number
+  teamId: number
+  teamName: string
+  fromNickname: string
+  createdAt: string
+}
+
+export interface TeamApplicationDTO {
+  id: number
+  teamId: number
+  characterId: string
+  nickname: string
+  message: string | null
+  createdAt: string
+}
+
+export interface TeamChunkUsageDTO {
+  used: number
+  limit: number
+}
+
+export interface TeamStateDTO {
+  team: TeamDTO | null
+  role: TeamRole | null
+  members: TeamMemberDTO[]
+  applications: TeamApplicationDTO[]
+  invitations: TeamInvitationDTO[]
+  chunkUsage: TeamChunkUsageDTO | null
+}
+
+export interface TeamSearchResultDTO {
+  teamId: number
+  name: string
+  leaderNickname: string
+  memberCount: number
+  createdAt: string
+}
+
+export interface TeamChatMessageDTO {
+  teamId: number
+  fromCharacterId: string
+  fromNickname: string
+  content: string
+  timestamp: string
 }

@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import CharacterService from '../services/CharacterService.js';
 import { authenticate } from '../middleware/auth.js';
+import VehicleService from '../services/VehicleService.js';
 
 const router = Router();
 
@@ -10,7 +11,7 @@ router.use(authenticate);
 // Create character
 router.post('/create', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { nickname, appearance, startContinent } = req.body;
+    const { nickname, appearance, startContinent, spawnMethod } = req.body;
     const userId = req.user?.userId;
 
     if (!userId) {
@@ -31,7 +32,8 @@ router.post('/create', async (req: Request, res: Response, next: NextFunction) =
       userId,
       nickname,
       appearance,
-      startContinent
+      startContinent,
+      spawnMethod
     );
 
     res.status(201).json({ status: 'success', data: character });
@@ -61,7 +63,7 @@ router.get('/me', async (req: Request, res: Response, next: NextFunction) => {
       });
     }
 
-    res.json({ status: 'success', data: character });
+    res.json({ status: 'success', data: { ...character, equippedVehicle: await VehicleService.getEquipped(String(character.id)) } });
   } catch (error) {
     next(error);
   }

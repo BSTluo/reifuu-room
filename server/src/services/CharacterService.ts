@@ -1,4 +1,4 @@
-import { query } from '../db/mysql.js';
+import { getConnection, query } from '../db/mysql.js';
 import { getRedis } from '../db/redis.js';
 import logger from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -16,6 +16,11 @@ interface ContinentSpawnPoint {
   gridX: number;
   gridY: number;
 }
+type SpawnMethod = 'unowned' | 'public';
+
+function isSpawnMethod(value: string | undefined): value is SpawnMethod {
+  return value === 'unowned' || value === 'public';
+}
 
 const SPAWN_POINTS: Record<string, ContinentSpawnPoint> = {
   east: { chunkX: 10, chunkY: 10, gridX: 5, gridY: 5 },
@@ -29,12 +34,17 @@ export class CharacterService {
     userId: string,
     nickname: string,
     appearance: Appearance,
-    startContinent: string
+    startContinent: string,
+    requestedSpawnMethod?: string
   ) {
     try {
       // Validate continent
       if (!['east', 'south', 'west', 'north'].includes(startContinent)) {
         throw new AppError('Invalid start continent', 400);
+      }
+      const spawnMethod = requestedSpawnMethod ?? 'unowned';
+      if (!isSpawnMethod(spawnMethod)) {
+        throw new AppError('Invalid spawn method', 400);
       }
 
       // Validate appearance fields
@@ -62,35 +72,54 @@ export class CharacterService {
         throw new AppError('Nickname already taken', 400);
       }
 
-      // Get spawn point for continent
-      const spawnPoint = SPAWN_POINTS[startContinent];
-      if (!spawnPoint) {
-        throw new AppError('No spawn point configured for continent', 500);
+      const fallback = SPAWN_POINTS[startContinent];
+      if (!fallback) throw new AppError('No spawn point configured for continent', 500);
+      const connection = await getConnection();
+      let chunkId: string;
+      let worldX: number;
+      let worldY: number;
+      let characterId: number;
+      try {
+        await connection.beginTransaction();
+        const [candidates]: any = await connection.execute(
+          `SELECT chunk_id, chunk_x, chunk_y
+           FROM map_chunks
+           WHERE ${spawnMethod === 'unowned'
+             ? "owner_id IS NULL AND chunk_type IN ('empty', 'resource')"
+             : 'owner_id IS NOT NULL AND is_public = TRUE'}
+           ORDER BY RAND()
+           LIMIT 1
+           FOR UPDATE`
+        );
+        const candidate = Array.isArray(candidates) && candidates.length > 0 ? candidates[0] : null;
+        const chunkX = candidate ? Number(candidate.chunk_x) : fallback.chunkX;
+        const chunkY = candidate ? Number(candidate.chunk_y) : fallback.chunkY;
+        chunkId = candidate ? String(candidate.chunk_id) : `${chunkX}_${chunkY}`;
+        const gridX = candidate ? Math.floor(Math.random() * 30) + 1 : fallback.gridX;
+        const gridY = candidate ? Math.floor(Math.random() * 30) + 1 : fallback.gridY;
+        worldX = chunkX * 32 + gridX;
+        worldY = chunkY * 32 + gridY;
+
+        const [result]: any = await connection.execute(
+          `INSERT INTO characters
+           (user_id, nickname, appearance, start_continent, spawn_method, current_chunk_id, grid_x, grid_y)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [userId, nickname, JSON.stringify(appearance), startContinent, spawnMethod, chunkId, worldX, worldY]
+        );
+        characterId = Number(result.insertId);
+        if (candidate && spawnMethod === 'unowned') {
+          await connection.execute('UPDATE map_chunks SET owner_id = ? WHERE chunk_id = ? AND owner_id IS NULL', [
+            characterId,
+            chunkId,
+          ]);
+        }
+        await connection.commit();
+      } catch (error) {
+        await connection.rollback();
+        throw error;
+      } finally {
+        connection.release();
       }
-      const chunkId = `${spawnPoint.chunkX}_${spawnPoint.chunkY}`;
-
-      // Convert chunk coordinates to world grid coordinates
-      // World coordinate = chunkX * 32 + gridX (assuming 32x32 grid per chunk)
-      const worldX = spawnPoint.chunkX * 32 + spawnPoint.gridX;
-      const worldY = spawnPoint.chunkY * 32 + spawnPoint.gridY;
-
-      // Insert character
-      const result: any = await query(
-        `INSERT INTO characters
-        (user_id, nickname, appearance, start_continent, current_chunk_id, grid_x, grid_y)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-          userId,
-          nickname,
-          JSON.stringify(appearance),
-          startContinent,
-          chunkId,
-          worldX,
-          worldY,
-        ]
-      );
-
-      const characterId = result.insertId;
 
       // 清除用户角色缓存
       const redis = getRedis();
@@ -104,7 +133,8 @@ export class CharacterService {
         userId: parseInt(userId),
         nickname,
         appearance,
-        startContinent,
+        continent: startContinent,
+        spawnMethod,
         currentChunkId: chunkId,
         position: {
           x: worldX,
@@ -135,7 +165,7 @@ export class CharacterService {
       // 缓存未命中，查询数据库
       const rows: any = await query(
         `SELECT id, user_id, nickname, appearance, start_continent,
-         current_chunk_id, grid_x, grid_y, created_at
+         spawn_method, current_chunk_id, grid_x, grid_y, created_at
          FROM characters WHERE user_id = ? LIMIT 1`,
         [userId]
       );
@@ -156,6 +186,7 @@ export class CharacterService {
           ? JSON.parse(char.appearance)
           : char.appearance,
         continent: char.start_continent,
+        spawnMethod: char.spawn_method || 'unowned',
         currentChunkId: char.current_chunk_id,
         position: {
           x: char.grid_x,

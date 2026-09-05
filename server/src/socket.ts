@@ -12,7 +12,12 @@ import ChatMessageService from './services/ChatMessageService.js';
 import PluginService from './services/PluginService.js';
 import BuildService from './services/BuildService.js';
 import FriendService from './services/FriendService.js';
+import PigeonMailService from './services/PigeonMailService.js';
+import TeamService from './services/TeamService.js';
+import TownService from './services/TownService.js';
+import { calculateChunkLimit } from './services/TeamService.js';
 import { query } from './db/mysql.js';
+import RoomMembershipService from './services/RoomMembershipService.js';
 
 /**
  * In-memory map: characterId → Set<socketId>.
@@ -30,6 +35,70 @@ function getSocketForCharacter(io: SocketIOServer, characterId: string): Socket 
     if (s) return s;
   }
   return null;
+}
+
+function getSocketsForCharacter(io: SocketIOServer, characterId: string): Socket[] {
+  const socketIds = characterSocketMap.get(characterId);
+  if (!socketIds) return [];
+  return Array.from(socketIds)
+    .map((socketId) => io.sockets.sockets.get(socketId))
+    .filter((socket): socket is Socket => Boolean(socket));
+}
+
+/**
+ * Build the full team state payload for a character (mirrors GET /team/info).
+ * Returns null if the character is not in a team.
+ */
+async function buildTeamStatePayload(characterId: string): Promise<any | null> {
+  const membership = await TeamService.getMembership(characterId);
+  if (!membership) {
+    return {
+      team: null,
+      role: null,
+      members: [],
+      applications: [],
+      invitations: await TeamService.getPendingInvitations(characterId),
+      chunkUsage: null,
+    };
+  }
+  const isOnline = async (cid: string) => {
+    const { default: redisClient, prefixKey } = await import('./db/redis.js');
+    return (await redisClient.exists(prefixKey(`player:${cid}:position`))) === 1;
+  };
+  const [team, members, applications, invitations, usedChunks, memberCount] = await Promise.all([
+    TeamService.getTeamInfo(membership.teamId),
+    TeamService.getTeamMembers(membership.teamId, isOnline),
+    membership.role === 'leader'
+      ? TeamService.getPendingApplications(membership.teamId)
+      : Promise.resolve([]),
+    TeamService.getPendingInvitations(characterId),
+    TeamService.getTeamChunkUsage(membership.teamId),
+    TeamService.getMemberCount(membership.teamId),
+  ]);
+  return {
+    team,
+    role: membership.role,
+    members,
+    applications,
+    invitations,
+    chunkUsage: { used: usedChunks, limit: calculateChunkLimit(memberCount) },
+  };
+}
+
+/** Emit an event to every online member of a team (optionally excluding one). */
+async function notifyTeamMembers(
+  io: SocketIOServer,
+  teamId: number,
+  event: string,
+  payload: any,
+  excludeCharacterId?: string
+): Promise<void> {
+  const memberIds = await TeamService.getTeamMemberIds(teamId);
+  for (const cid of memberIds) {
+    if (excludeCharacterId && cid === excludeCharacterId) continue;
+    const s = getSocketForCharacter(io, cid);
+    if (s) s.emit(event, payload);
+  }
 }
 
 interface SocketData {
@@ -188,6 +257,7 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
             result.chunkId,
             1
           );
+          await TownService.markVisit(character.id, result.chunkId);
           if (newlyExplored.length > 0) {
             socket.emit('map:explore', { chunks: newlyExplored });
           }
@@ -223,6 +293,7 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
         socket.emit('player:move-confirmed', {
           position: result.position,
           chunkId: result.chunkId,
+          equippedVehicle: result.equippedVehicle,
         });
       } catch (error: any) {
         logger.error('Player move error', error);
@@ -303,6 +374,7 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
         }
 
         const roomKey = `room:${roomId}`;
+        await RoomMembershipService.requireAccess(roomId, character.id);
         socket.join(roomKey);
         socket.data.currentRoomId = roomId;
 
@@ -337,6 +409,33 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       logger.info(`${character?.nickname ?? 'unknown'} left chat room ${roomId}`);
     });
 
+    socket.on('room:membership-refresh', async (data: { roomId: string; removedCharacterId?: string }) => {
+      if (!character) return;
+      const roomId = String(data?.roomId ?? '');
+      if (!/^\d+$/.test(roomId)) return;
+      try {
+        await RoomMembershipService.requireAccess(roomId, character.id);
+        if (data.removedCharacterId) {
+          await RoomMembershipService.requireOwner(roomId, character.id);
+          const isRemoved = await RoomMembershipService.isRemoved(roomId, String(data.removedCharacterId));
+          if (!isRemoved) {
+            throw new Error('Member removal has not been persisted');
+          }
+          const removedSockets = getSocketsForCharacter(io, String(data.removedCharacterId));
+          for (const removedSocket of removedSockets) {
+            if ((removedSocket.data as SocketData).currentRoomId !== roomId) continue;
+            removedSocket.emit('room:member-removed', { roomId });
+            removedSocket.leave(`room:${roomId}`);
+            delete (removedSocket.data as SocketData).currentRoomId;
+          }
+        }
+        const members = await getRoomMembers(io, `room:${roomId}`);
+        io.to(`room:${roomId}`).emit('room:members', { roomId, members });
+      } catch (error: any) {
+        socket.emit('error', { message: error.message || 'Failed to refresh room members' });
+      }
+    });
+
     // Send a chat message to a room (persist + broadcast)
     socket.on('room:message', async (data: { roomId: string; content: string }) => {
       if (!character) {
@@ -351,6 +450,11 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       }
 
       try {
+        if ((socket.data as SocketData).currentRoomId !== roomId) {
+          socket.emit('error', { message: 'Must be in the room to send messages' });
+          return;
+        }
+        await RoomMembershipService.requireAccess(roomId, character.id);
         const message = await ChatMessageService.sendMessage(roomId, character.id, content);
         io.to(`room:${roomId}`).emit('room:message', { roomId, message });
       } catch (error: any) {
@@ -361,13 +465,13 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
 
     // ---- Plugin events ----
     // Activate a plugin in a room
-    socket.on('plugin:activate', (data: { roomId: string; pluginId: string }) => {
+    socket.on('plugin:activate', async (data: { roomId: string; pluginId: string }) => {
       if (!character) return;
       const roomId = String(data?.roomId ?? '');
       const pluginId = String(data?.pluginId ?? '');
       if (!/^\d+$/.test(roomId) || !pluginId) return;
 
-      const allowedPlugins = ['music-sync', 'video-sync'];
+      const allowedPlugins = ['music-sync', 'video-sync', 'radio-fm', 'doudizhu'];
       if (!allowedPlugins.includes(pluginId)) {
         socket.emit('error', { message: `Unknown plugin: ${pluginId}` });
         return;
@@ -376,6 +480,12 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       // Must be in the room to activate plugins
       if ((socket.data as SocketData).currentRoomId !== roomId) {
         socket.emit('error', { message: 'Must be in the room to activate plugins' });
+        return;
+      }
+      try {
+        await RoomMembershipService.requireAccess(roomId, character.id);
+      } catch (error: any) {
+        socket.emit('error', { message: error.message || 'Room membership required' });
         return;
       }
 
@@ -390,11 +500,17 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
     });
 
     // Deactivate a plugin in a room
-    socket.on('plugin:deactivate', (data: { roomId: string; pluginId: string }) => {
+    socket.on('plugin:deactivate', async (data: { roomId: string; pluginId: string }) => {
       if (!character) return;
       const roomId = String(data?.roomId ?? '');
       const pluginId = String(data?.pluginId ?? '');
       if (!/^\d+$/.test(roomId) || !pluginId) return;
+      try {
+        await RoomMembershipService.requireAccess(roomId, character.id);
+      } catch (error: any) {
+        socket.emit('error', { message: error.message || 'Room membership required' });
+        return;
+      }
 
       const existed = PluginService.deactivate(roomId, pluginId);
       if (existed) {
@@ -405,11 +521,17 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
     });
 
     // Sync plugin state (controller sends state update, server broadcasts)
-    socket.on('plugin:state-sync', (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => {
+    socket.on('plugin:state-sync', async (data: { roomId: string; pluginId: string; state: Record<string, unknown> }) => {
       if (!character) return;
       const roomId = String(data?.roomId ?? '');
       const pluginId = String(data?.pluginId ?? '');
       if (!/^\d+$/.test(roomId) || !pluginId || !data?.state) return;
+      try {
+        await RoomMembershipService.requireAccess(roomId, character.id);
+      } catch (error: any) {
+        socket.emit('error', { message: error.message || 'Room membership required' });
+        return;
+      }
 
       // Only the controller (activator) or room owner can send state updates
       const current = PluginService.getState(roomId, pluginId);
@@ -423,6 +545,83 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
         // stay in sync through the same code path.
         io.to(roomKey).emit('plugin:state', { roomId, pluginId, state: updatedState });
       }
+    });
+
+    // ---- Furniture (room interior) events ----
+    // Real-time furniture sync. The REST API in routes/room.ts is the primary
+    // path for place/move/remove; the socket path broadcasts changes to all
+    // room members so their interior scenes stay in sync.
+
+    // Client requests the current furniture layout (sent on entering a room)
+    socket.on('room:furniture-request', async (data: { roomId: string }) => {
+      if (!character) return;
+      const roomId = String(data?.roomId ?? '');
+      if (!/^\d+$/.test(roomId)) return;
+      try {
+        await RoomMembershipService.requireAccess(roomId, character.id);
+        const { default: RoomService } = await import('./services/RoomService.js');
+        const furniture = await RoomService.getFurniture(roomId);
+        socket.emit('room:furniture', { roomId, furniture });
+      } catch (error: any) {
+        logger.error('Furniture request error', error);
+        socket.emit('error', { message: error.message || 'Failed to load furniture' });
+      }
+    });
+
+    // Broadcast a furniture change to all room members
+    socket.on('room:furniture-changed', (data: {
+      roomId: string;
+      action: 'placed' | 'moved' | 'removed';
+      furniture: any;
+    }) => {
+      if (!character) return;
+      const roomId = String(data?.roomId ?? '');
+      const action = String(data?.action ?? '');
+      if (!/^\d+$/.test(roomId) || !['placed', 'moved', 'removed'].includes(action)) return;
+      if ((socket.data as SocketData).currentRoomId !== roomId) return;
+      const roomKey = `room:${roomId}`;
+      io.to(roomKey).emit('room:furniture-changed', {
+        roomId,
+        action,
+        furniture: data.furniture,
+      });
+    });
+
+    socket.on('town:request-state', async () => {
+      if (!character) return;
+      try {
+        await TownService.ensureTownForChunk(character.chunkId, 'east', character.id);
+        socket.emit('town:state', { towns: await TownService.listForCharacter(character.id) });
+      }
+      catch (error: any) { socket.emit('error', { message: error.message || 'Failed to load towns' }); }
+    });
+    socket.on('town:teleport', async (data: { townId: number }) => {
+      if (!character) return;
+      try {
+        const result = await TownService.teleport(character.id, Number(data?.townId));
+        const oldChunkId = character.chunkId;
+        await MovementService.teleportPlayer(
+          user.userId, character.id, character.nickname,
+          result.position, result.town.chunkId
+        );
+        if (oldChunkId !== result.town.chunkId) {
+          socket.leave(oldChunkId);
+          socket.to(oldChunkId).emit('player:leave-chunk', { characterId: character.id });
+          socket.join(result.town.chunkId);
+          character.chunkId = result.town.chunkId;
+        }
+        const playersInNewChunk = await MovementService.getPlayersInChunk(result.town.chunkId);
+        socket.emit('players:in-chunk', {
+          players: playersInNewChunk.filter(p => p.characterId !== character.id).map(p => ({
+            characterId: p.characterId, nickname: p.nickname, position: p.position,
+          })),
+        });
+        socket.to(result.town.chunkId).emit('player:enter-chunk', {
+          characterId: character.id, nickname: character.nickname, position: result.position,
+        });
+        socket.emit('town:teleport-confirmed', { townId: result.town.id, name: result.town.name, position: result.position, chunkId: result.town.chunkId });
+        if (result.chunks.length) socket.emit('map:explore', { chunks: result.chunks });
+      } catch (error: any) { socket.emit('error', { message: error.message || 'Teleport failed' }); }
     });
 
     // ---- Friend system events ----
@@ -600,6 +799,448 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       }
     });
 
+    // ---- Pigeon mail (飞鸽传信, GDD 2.7) ----
+    // Client asks for its current pigeon mail state (inbox + unread count).
+    // Sent by the pigeon panel when it opens.
+    socket.on('pigeon:request-state', async () => {
+      if (!character) return;
+      try {
+        const messages = await PigeonMailService.getInbox(character.id);
+        const unreadCount = await PigeonMailService.getUnreadCount(character.id);
+        socket.emit('pigeon:state', { messages, unreadCount });
+      } catch (error: any) {
+        logger.error('Pigeon state error', error);
+        socket.emit('error', { message: error.message || 'Failed to load pigeon mail' });
+      }
+    });
+
+    // Send a pigeon message. On success the sender gets 'pigeon:sent' with the
+    // calculated delay; if the message is instant AND the recipient is online,
+    // they get an immediate 'pigeon:delivered' notification.
+    socket.on(
+      'pigeon:send',
+      async (data: { toCharacterId: string; content: string }) => {
+        if (!character) {
+          socket.emit('error', { message: 'No character found' });
+          return;
+        }
+        try {
+          const result = await PigeonMailService.sendMessage(
+            character.id,
+            String(data?.toCharacterId ?? ''),
+            String(data?.content ?? '')
+          );
+          socket.emit('pigeon:sent', {
+            messageId: result.messageId,
+            toCharacterId: String(data?.toCharacterId),
+            toNickname: result.toNickname,
+            delayMs: result.delayMs,
+            delivered: result.delivered,
+          });
+          // Instant delivery → notify an online recipient right away
+          if (result.delivered) {
+            const targetSocket = getSocketForCharacter(io, String(data?.toCharacterId));
+            if (targetSocket) {
+              targetSocket.emit('pigeon:delivered', {
+                messageId: result.messageId,
+                fromCharacterId: character.id,
+                fromNickname: character.nickname,
+                content: String(data?.content ?? '').trim(),
+                createdAt: new Date().toISOString(),
+              });
+            }
+          }
+        } catch (error: any) {
+          logger.error('Pigeon send error', error);
+          socket.emit('error', { message: error.message || 'Failed to send pigeon mail' });
+        }
+      }
+    );
+
+    // Mark a received message as read (recipient only)
+    socket.on('pigeon:mark-read', async (data: { messageId: number }) => {
+      if (!character) return;
+      try {
+        await PigeonMailService.markRead(Number(data?.messageId), character.id);
+        const unreadCount = await PigeonMailService.getUnreadCount(character.id);
+        socket.emit('pigeon:read-confirmed', {
+          messageId: Number(data?.messageId),
+          unreadCount,
+        });
+      } catch (error: any) {
+        logger.error('Pigeon mark-read error', error);
+        socket.emit('error', { message: error.message || 'Failed to mark message read' });
+      }
+    });
+
+    // ---- Team system (团队系统, GDD 2.9) ----
+
+    // Client asks for full team state (when opening the team panel).
+    socket.on('team:request-state', async () => {
+      if (!character) return;
+      try {
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+      } catch (error: any) {
+        logger.error('Team state error', error);
+        socket.emit('error', { message: error.message || 'Failed to load team state' });
+      }
+    });
+
+    // Create a team
+    socket.on('team:create', async (data: { name: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const team = await TeamService.createTeam(character.id, String(data?.name ?? ''));
+        // Refresh full state for creator
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+      } catch (error: any) {
+        logger.error('Team create error', error);
+        socket.emit('error', { message: error.message || 'Failed to create team' });
+      }
+    });
+
+    // Leader invites a player
+    socket.on('team:invite', async (data: { characterId: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const result = await TeamService.inviteMember(
+          character.id,
+          String(data?.characterId ?? '')
+        );
+        // Notify the invited player in real time
+        const targetSocket = getSocketForCharacter(io, String(data?.characterId));
+        if (targetSocket) {
+          const invitations = await TeamService.getPendingInvitations(String(data?.characterId));
+          targetSocket.emit('team:invite-received', {
+            invitationId: result.invitationId,
+            teamId: result.teamId,
+            teamName: result.teamName,
+            fromNickname: character.nickname,
+          });
+          // Also send updated invitations list
+          targetSocket.emit('team:invitations', invitations);
+        }
+        // Refresh inviter's state (they see the invitation in their sent list)
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+      } catch (error: any) {
+        logger.error('Team invite error', error);
+        socket.emit('error', { message: error.message || 'Failed to invite member' });
+      }
+    });
+
+    // Player applies to join a team
+    socket.on('team:apply', async (data: { teamId: number; message?: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const teamId = Number(data?.teamId);
+        const result = await TeamService.applyToTeam(
+          character.id,
+          teamId,
+          data?.message
+        );
+        // Notify the leader of the team
+        const teamInfo = await TeamService.getTeamInfo(teamId);
+        const leaderSocket = getSocketForCharacter(io, teamInfo.leaderCharacterId);
+        if (leaderSocket) {
+          const applications = await TeamService.getPendingApplications(teamId);
+          leaderSocket.emit('team:application-received', {
+            applicationId: result.applicationId,
+            teamId,
+            teamName: result.teamName,
+            characterId: character.id,
+            nickname: character.nickname,
+            message: data?.message ?? null,
+          });
+          leaderSocket.emit('team:applications', applications);
+        }
+        socket.emit('team:applied', { teamId, teamName: result.teamName });
+      } catch (error: any) {
+        logger.error('Team apply error', error);
+        socket.emit('error', { message: error.message || 'Failed to apply to team' });
+      }
+    });
+
+    // Invitee accepts an invitation
+    socket.on('team:accept-invite', async (data: { invitationId: number }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const result = await TeamService.acceptInvitation(
+          Number(data?.invitationId),
+          character.id
+        );
+        // Refresh acceptor's full state
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+        // Notify all team members about the new member
+        await notifyTeamMembers(io, result.teamId, 'team:member-joined', {
+          teamId: result.teamId,
+          characterId: character.id,
+          nickname: character.nickname,
+        }, character.id);
+        // Send each member (including the new one) their refreshed state
+        const memberIds = await TeamService.getTeamMemberIds(result.teamId);
+        for (const cid of memberIds) {
+          const s = getSocketForCharacter(io, cid);
+          if (s) {
+            const ms = await buildTeamStatePayload(cid);
+            s.emit('team:state', ms);
+          }
+        }
+      } catch (error: any) {
+        logger.error('Team accept invite error', error);
+        socket.emit('error', { message: error.message || 'Failed to accept invitation' });
+      }
+    });
+
+    // Invitee rejects an invitation
+    socket.on('team:reject-invite', async (data: { invitationId: number }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        await TeamService.rejectInvitation(Number(data?.invitationId), character.id);
+        // Refresh state for the rejecting user (removes invitation)
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+      } catch (error: any) {
+        logger.error('Team reject invite error', error);
+        socket.emit('error', { message: error.message || 'Failed to reject invitation' });
+      }
+    });
+
+    // Leader accepts an application
+    socket.on('team:accept-application', async (data: { applicationId: number }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const result = await TeamService.acceptApplication(
+          Number(data?.applicationId),
+          character.id
+        );
+        // Refresh leader's state
+        const leaderState = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', leaderState);
+        // Notify the applicant
+        const applicantSocket = getSocketForCharacter(io, result.characterId);
+        if (applicantSocket) {
+          const applicantState = await buildTeamStatePayload(result.characterId);
+          applicantSocket.emit('team:state', applicantState);
+        }
+        // Notify all team members about the new member
+        await notifyTeamMembers(io, result.teamId, 'team:member-joined', {
+          teamId: result.teamId,
+          characterId: result.characterId,
+          nickname: result.nickname,
+        }, character.id);
+        // Refresh all members' states
+        const memberIds = await TeamService.getTeamMemberIds(result.teamId);
+        for (const cid of memberIds) {
+          const s = getSocketForCharacter(io, cid);
+          if (s) {
+            const ms = await buildTeamStatePayload(cid);
+            s.emit('team:state', ms);
+          }
+        }
+      } catch (error: any) {
+        logger.error('Team accept application error', error);
+        socket.emit('error', { message: error.message || 'Failed to accept application' });
+      }
+    });
+
+    // Leader rejects an application
+    socket.on('team:reject-application', async (data: { applicationId: number }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        await TeamService.rejectApplication(Number(data?.applicationId), character.id);
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+      } catch (error: any) {
+        logger.error('Team reject application error', error);
+        socket.emit('error', { message: error.message || 'Failed to reject application' });
+      }
+    });
+
+    // Leader kicks a member
+    socket.on('team:kick', async (data: { characterId: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const result = await TeamService.kickMember(character.id, String(data?.characterId ?? ''));
+        // Refresh leader's state
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+        // Notify kicked member
+        const kickedSocket = getSocketForCharacter(io, String(data?.characterId));
+        if (kickedSocket) {
+          kickedSocket.emit('team:kicked', {
+            teamId: result.teamId,
+            teamName: result.teamName,
+          });
+          const kickedState = await buildTeamStatePayload(String(data?.characterId));
+          kickedSocket.emit('team:state', kickedState);
+        }
+        // Notify remaining members
+        await notifyTeamMembers(io, result.teamId, 'team:member-left', {
+          teamId: result.teamId,
+          characterId: String(data?.characterId),
+          nickname: result.nickname,
+        }, character.id);
+      } catch (error: any) {
+        logger.error('Team kick error', error);
+        socket.emit('error', { message: error.message || 'Failed to kick member' });
+      }
+    });
+
+    // Member leaves the team
+    socket.on('team:leave', async () => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const membership = await TeamService.getMembership(character.id);
+        if (!membership) {
+          socket.emit('error', { message: 'You are not in a team' });
+          return;
+        }
+        const teamId = membership.teamId;
+        const result = await TeamService.leaveTeam(character.id);
+        // Refresh leaver's state
+        const state = await buildTeamStatePayload(character.id);
+        socket.emit('team:state', state);
+        // Notify remaining members
+        await notifyTeamMembers(io, teamId, 'team:member-left', {
+          teamId,
+          characterId: character.id,
+          nickname: character.nickname,
+        });
+        // Refresh all remaining members' states
+        const memberIds = await TeamService.getTeamMemberIds(teamId);
+        for (const cid of memberIds) {
+          const s = getSocketForCharacter(io, cid);
+          if (s) {
+            const ms = await buildTeamStatePayload(cid);
+            s.emit('team:state', ms);
+          }
+        }
+      } catch (error: any) {
+        logger.error('Team leave error', error);
+        socket.emit('error', { message: error.message || 'Failed to leave team' });
+      }
+    });
+
+    // Leader transfers leadership
+    socket.on('team:transfer', async (data: { characterId: string }) => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const result = await TeamService.transferLeadership(
+          character.id,
+          String(data?.characterId ?? '')
+        );
+        // Refresh all members' states (leader changed)
+        const memberIds = await TeamService.getTeamMemberIds(result.teamId);
+        for (const cid of memberIds) {
+          const s = getSocketForCharacter(io, cid);
+          if (s) {
+            const ms = await buildTeamStatePayload(cid);
+            s.emit('team:state', ms);
+          }
+        }
+      } catch (error: any) {
+        logger.error('Team transfer error', error);
+        socket.emit('error', { message: error.message || 'Failed to transfer leadership' });
+      }
+    });
+
+    // Leader disbands the team
+    socket.on('team:disband', async () => {
+      if (!character) {
+        socket.emit('error', { message: 'No character found' });
+        return;
+      }
+      try {
+        const membership = await TeamService.getMembership(character.id);
+        if (!membership) {
+          socket.emit('error', { message: 'You are not in a team' });
+          return;
+        }
+        const teamId = membership.teamId;
+        const result = await TeamService.disbandTeam(character.id);
+        // Notify all former members
+        for (const cid of result.memberIds) {
+          const s = getSocketForCharacter(io, cid);
+          if (s) {
+            s.emit('team:disbanded', {
+              teamId: result.teamId,
+              teamName: result.teamName,
+            });
+            const ms = await buildTeamStatePayload(cid);
+            s.emit('team:state', ms);
+          }
+        }
+      } catch (error: any) {
+        logger.error('Team disband error', error);
+        socket.emit('error', { message: error.message || 'Failed to disband team' });
+      }
+    });
+
+    // Team chat message (real-time only, not persisted)
+    socket.on('team:chat', async (data: { content: string }) => {
+      if (!character) return;
+      try {
+        const membership = await TeamService.getMembership(character.id);
+        if (!membership) {
+          socket.emit('error', { message: 'You are not in a team' });
+          return;
+        }
+        const content = String(data?.content ?? '').trim();
+        if (!content) return;
+        if (content.length > 500) {
+          socket.emit('error', { message: 'Message too long (max 500 characters)' });
+          return;
+        }
+        const teamId = membership.teamId;
+        const payload = {
+          teamId,
+          fromCharacterId: character.id,
+          fromNickname: character.nickname,
+          content,
+          timestamp: new Date().toISOString(),
+        };
+        // Broadcast to all team members (including sender)
+        await notifyTeamMembers(io, teamId, 'team:chat-message', payload);
+      } catch (error: any) {
+        logger.error('Team chat error', error);
+        socket.emit('error', { message: error.message || 'Failed to send team message' });
+      }
+    });
+
     // ---- Disconnect handler ----
     socket.on('disconnect', (reason) => {
       logger.info(`Client disconnected: ${user?.username} (${socket.id}), reason: ${reason}`);
@@ -689,6 +1330,28 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
       });
     }
   });
+
+  // ---- Pigeon mail delivery tick ----
+  // Periodically promote due "sending" messages to "delivered" and notify
+  // online recipients in real time (GDD 2.7 飞鸽传信).
+  setInterval(() => {
+    PigeonMailService.deliverDueMessages()
+      .then((delivered) => {
+        for (const msg of delivered) {
+          const targetSocket = getSocketForCharacter(io, msg.toCharacterId);
+          if (targetSocket) {
+            targetSocket.emit('pigeon:delivered', {
+              messageId: msg.id,
+              fromCharacterId: msg.fromCharacterId,
+              fromNickname: msg.fromNickname,
+              content: msg.content,
+              createdAt: msg.createdAt,
+            });
+          }
+        }
+      })
+      .catch((err) => logger.error('Pigeon delivery tick failed', err));
+  }, 30_000);
 
   return io;
 };

@@ -41,15 +41,10 @@ export class PreloadScene extends Phaser.Scene {
 
       const g = this.add.graphics()
       g.fillStyle(color, 1)
-      g.lineStyle(1, 0x000000, 0.15)
-      g.beginPath()
-      g.moveTo(TILE_WIDTH / 2, 0)
-      g.lineTo(TILE_WIDTH, TILE_HEIGHT / 2)
-      g.lineTo(TILE_WIDTH / 2, TILE_HEIGHT)
-      g.lineTo(0, TILE_HEIGHT / 2)
-      g.closePath()
-      g.fillPath()
-      g.strokePath()
+      g.fillRect(0, 0, TILE_WIDTH, TILE_HEIGHT)
+      // 轻微网格线，便于辨识 tile 边界
+      g.lineStyle(1, 0x000000, 0.12)
+      g.strokeRect(0, 0, TILE_WIDTH, TILE_HEIGHT)
       g.generateTexture(key, TILE_WIDTH, TILE_HEIGHT)
       g.destroy()
     }
@@ -62,10 +57,15 @@ export class PreloadScene extends Phaser.Scene {
     const width = 32
     const height = 48
     const g = this.add.graphics()
+    // 身体（略窄于 tile，2.5D 纵深感）
     g.fillStyle(0x8fd3ff, 1)
-    g.fillRoundedRect(4, 10, width - 8, height - 14, 4)
+    g.fillRoundedRect(4, 14, width - 8, height - 18, 4)
+    // 头部（俯视圆形）
     g.fillStyle(0xffe0b2, 1)
-    g.fillCircle(width / 2, 9, 7)
+    g.fillCircle(width / 2, 10, 8)
+    // 阴影底座
+    g.fillStyle(0x000000, 0.15)
+    g.fillEllipse(width / 2, height - 2, 28, 10)
     g.generateTexture(key, width, height)
     g.destroy()
   }
