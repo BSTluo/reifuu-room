@@ -14,6 +14,7 @@ import BuildService from './services/BuildService.js';
 import FriendService from './services/FriendService.js';
 import PigeonMailService from './services/PigeonMailService.js';
 import TeamService from './services/TeamService.js';
+import TownService from './services/TownService.js';
 import { calculateChunkLimit } from './services/TeamService.js';
 import { query } from './db/mysql.js';
 
@@ -247,6 +248,7 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
             result.chunkId,
             1
           );
+          await TownService.markVisit(character.id, result.chunkId);
           if (newlyExplored.length > 0) {
             socket.emit('map:explore', { chunks: newlyExplored });
           }
@@ -520,6 +522,43 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
         action,
         furniture: data.furniture,
       });
+    });
+
+    socket.on('town:request-state', async () => {
+      if (!character) return;
+      try {
+        await TownService.ensureTownForChunk(character.chunkId, 'east', character.id);
+        socket.emit('town:state', { towns: await TownService.listForCharacter(character.id) });
+      }
+      catch (error: any) { socket.emit('error', { message: error.message || 'Failed to load towns' }); }
+    });
+    socket.on('town:teleport', async (data: { townId: number }) => {
+      if (!character) return;
+      try {
+        const result = await TownService.teleport(character.id, Number(data?.townId));
+        const oldChunkId = character.chunkId;
+        await MovementService.teleportPlayer(
+          user.userId, character.id, character.nickname,
+          result.position, result.town.chunkId
+        );
+        if (oldChunkId !== result.town.chunkId) {
+          socket.leave(oldChunkId);
+          socket.to(oldChunkId).emit('player:leave-chunk', { characterId: character.id });
+          socket.join(result.town.chunkId);
+          character.chunkId = result.town.chunkId;
+        }
+        const playersInNewChunk = await MovementService.getPlayersInChunk(result.town.chunkId);
+        socket.emit('players:in-chunk', {
+          players: playersInNewChunk.filter(p => p.characterId !== character.id).map(p => ({
+            characterId: p.characterId, nickname: p.nickname, position: p.position,
+          })),
+        });
+        socket.to(result.town.chunkId).emit('player:enter-chunk', {
+          characterId: character.id, nickname: character.nickname, position: result.position,
+        });
+        socket.emit('town:teleport-confirmed', { townId: result.town.id, name: result.town.name, position: result.position, chunkId: result.town.chunkId });
+        if (result.chunks.length) socket.emit('map:explore', { chunks: result.chunks });
+      } catch (error: any) { socket.emit('error', { message: error.message || 'Teleport failed' }); }
     });
 
     // ---- Friend system events ----

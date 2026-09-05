@@ -21,6 +21,7 @@ import friendsRouter from './routes/friends.js';
 import pigeonRouter from './routes/pigeon.js';
 import teamRouter from './routes/team.js';
 import roomRouter from './routes/room.js';
+import townRouter from './routes/town.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -45,6 +46,7 @@ app.use('/friends', friendsRouter);
 app.use('/pigeon', pigeonRouter);
 app.use('/team', teamRouter);
 app.use('/room', roomRouter);
+app.use('/town', townRouter);
 
 app.use(errorHandler);
 

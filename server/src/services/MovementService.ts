@@ -79,6 +79,7 @@ export class MovementService {
           logger.warn(`Invalid movement detected for user ${userId}: distance too large`);
           throw new AppError('Invalid movement: distance too large', 400);
         }
+
       } else {
         // First movement, fetch from database
         const rows: any = await query(
@@ -134,6 +135,22 @@ export class MovementService {
       logger.error('Movement handling error', error);
       throw new AppError('Movement failed', 500);
     }
+  }
+
+  /** Authoritative non-walk teleport used by portals and social travel. */
+  async teleportPlayer(
+    userId: string, characterId: string, nickname: string,
+    position: Position, chunkId: string
+  ): Promise<void> {
+    const playerData: PlayerPosition = {
+      userId, characterId, nickname, chunkId, position, timestamp: Date.now(),
+    };
+    await redisClient.setEx(
+      prefixKey(`player:${characterId}:position`),
+      300,
+      JSON.stringify(playerData)
+    );
+    await this.updatePositionInDatabase(characterId, position, chunkId);
   }
 
   /**

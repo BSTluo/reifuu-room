@@ -16,6 +16,7 @@ import FriendListPanel from '../components/game/HUD/FriendListPanel.vue'
 import MailboxPanel from '../components/game/HUD/MailboxPanel.vue'
 import PigeonMailPanel from '../components/game/HUD/PigeonMailPanel.vue'
 import TeamPanel from '../components/game/HUD/TeamPanel.vue'
+import TownPortalPanel from '../components/game/HUD/TownPortalPanel.vue'
 import PlayerInfoCard from '../components/game/HUD/PlayerInfoCard.vue'
 import { apiGet, apiPost, ApiRequestError } from '../api/http'
 import type { BuildTemplateDTO, OwnedChunkDTO } from '../api/types'
@@ -33,6 +34,7 @@ const interiorStore = useInteriorStore()
 const friendStore = useFriendStore()
 const pigeonStore = usePigeonStore()
 const teamStore = useTeamStore()
+const showTownPortal = ref(false)
 const { isMobile } = useMobile()
 
 const phaserReady = ref(false)
@@ -357,6 +359,7 @@ onBeforeUnmount(() => {
           👥 团队
           <span v-if="teamStore.inTeam" class="team-badge">{{ teamStore.members.length }}</span>
         </button>
+        <button class="action-btn" @click="showTownPortal = !showTownPortal">🌀 城镇传送</button>
       </div>
 
       <div v-if="showInventory" class="panel">
@@ -432,6 +435,9 @@ onBeforeUnmount(() => {
 
       <div v-if="showTeam" class="panel">
         <TeamPanel />
+      </div>
+      <div v-if="showTownPortal" class="panel">
+        <TownPortalPanel />
       </div>
     </div>
 

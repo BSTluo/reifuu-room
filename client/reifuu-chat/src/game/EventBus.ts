@@ -1,5 +1,9 @@
 import mitt from 'mitt'
 import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO, FurnitureItemDTO } from '../api/types'
+export interface TownDTO {
+  id: number; name: string; chunkId: string; continent: string; level: number
+  portalId: number; portalX: number; portalY: number; cooldownSeconds: number; cooldownRemaining?: number; unlocked: boolean
+}
 
 /**
  * Vue <-> Phaser 通信事件表。
@@ -35,6 +39,8 @@ export type GameEvents = {
   'exploration:updated': { chunks: string[] }
   /** 玩家所在区块变化（跨越区块边界） */
   'player:chunk-changed': { chunkId: string }
+  'town:state': { towns: TownDTO[] }
+  'town:teleport-confirmed': { townId: number; name: string; position: { x: number; y: number }; chunkId: string }
 
   // Resource / inventory / build
   /** 资源采集成功（服务端确认），携带最新背包 */
@@ -43,6 +49,7 @@ export type GameEvents = {
     resourceType: string
     inventory: { itemType: string; quantity: number }[]
   }
+
   /** 同区块其他玩家采集了资源节点 → 前端标记为已耗尽 */
   'resource:node-depleted': { nodeId: number }
   /** 背包已更新（采集/建造后） */

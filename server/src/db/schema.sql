@@ -179,6 +179,39 @@ CREATE TABLE IF NOT EXISTS explored_chunks (
     FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Towns are explicit fast-travel anchors formed from a group of chat rooms.
+CREATE TABLE IF NOT EXISTS towns (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(80) NOT NULL,
+    chunk_id VARCHAR(50) NOT NULL UNIQUE,
+    continent ENUM('east', 'south', 'west', 'north') NOT NULL,
+    level INT NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_town_continent (continent)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS portals (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    town_id INT NOT NULL,
+    name VARCHAR(80) NOT NULL,
+    grid_x FLOAT NOT NULL DEFAULT 5,
+    grid_y FLOAT NOT NULL DEFAULT 5,
+    cooldown_seconds INT NOT NULL DEFAULT 30,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (town_id) REFERENCES towns(id) ON DELETE CASCADE,
+    UNIQUE KEY idx_portal_town (town_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS town_visits (
+    character_id INT NOT NULL,
+    town_id INT NOT NULL,
+    visited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (character_id, town_id),
+    FOREIGN KEY (character_id) REFERENCES characters(id) ON DELETE CASCADE,
+    FOREIGN KEY (town_id) REFERENCES towns(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Friendships table (GDD 2.7 好友系统)
 -- 单条记录表示双向好友关系，character_id_1 < character_id_2 保证唯一
 CREATE TABLE IF NOT EXISTS friendships (

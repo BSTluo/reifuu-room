@@ -1,6 +1,7 @@
 import { io, Socket } from 'socket.io-client'
 import { EventBus } from '../EventBus'
 import type { FriendListItemDTO, FriendRequestDTO, PigeonMessageDTO, TeamStateDTO, TeamInvitationDTO, TeamApplicationDTO, TeamChatMessageDTO, FurnitureItemDTO } from '../../api/types'
+import type { TownDTO } from '../EventBus'
 
 export interface ServerToClientEvents {
   echo: (payload: unknown) => void
@@ -12,6 +13,8 @@ export interface ServerToClientEvents {
   'map:chunk-data': (data: { chunkId: string; tiles: string[][] }) => void
   'map:initial-explored': (data: { chunks: string[] }) => void
   'map:explore': (data: { chunks: string[] }) => void
+  'town:state': (data: { towns: TownDTO[] }) => void
+  'town:teleport-confirmed': (data: { townId: number; name: string; position: { x: number; y: number }; chunkId: string }) => void
   'resource:collected': (data: {
     nodeId: number
     resourceType: string
@@ -95,6 +98,8 @@ export interface ClientToServerEvents {
   'team:transfer': (data: { characterId: string }) => void
   'team:disband': () => void
   'team:chat': (data: { content: string }) => void
+  'town:request-state': () => void
+  'town:teleport': (data: { townId: number }) => void
   // Furniture events (client -> server)
   'room:furniture-request': (data: { roomId: string }) => void
   'room:furniture-changed': (data: { roomId: string; action: 'placed' | 'moved' | 'removed'; furniture: FurnitureItemDTO }) => void
@@ -142,6 +147,8 @@ class SocketClient {
     this.socket.on('map:explore', (data: { chunks: string[] }) => {
       EventBus.emit('map:explore', data)
     })
+    this.socket.on('town:state', (data) => EventBus.emit('town:state', data))
+    this.socket.on('town:teleport-confirmed', (data) => EventBus.emit('town:teleport-confirmed', data))
 
     // 资源/背包：服务端确认采集 → EventBus 通知场景与 UI
     this.socket.on(

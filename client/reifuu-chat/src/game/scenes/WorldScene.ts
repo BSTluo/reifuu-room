@@ -110,6 +110,7 @@ export class WorldScene extends Phaser.Scene {
     EventBus.on('player:chunk-changed', this.onPlayerChunkChangedForRooms)
     EventBus.on('build:created', this.onBuildCreated)
     EventBus.on('friend:teleport-confirmed', this.onFriendTeleportConfirmed)
+    EventBus.on('town:teleport-confirmed', this.onTownTeleportConfirmed)
 
     // 若 socket 尚未推送初始已探索列表（如重连复用旧 socket），通过 REST 兜底拉取
     if (!explorationStore.initialized) {
@@ -171,6 +172,7 @@ export class WorldScene extends Phaser.Scene {
     EventBus.off('player:chunk-changed', this.onPlayerChunkChangedForRooms)
     EventBus.off('build:created', this.onBuildCreated)
     EventBus.off('friend:teleport-confirmed', this.onFriendTeleportConfirmed)
+    EventBus.off('town:teleport-confirmed', this.onTownTeleportConfirmed)
     this.cleanupMultiplayerSync()
     this.clearResourceSprites()
     this.clearRoomSprites()
@@ -555,6 +557,11 @@ export class WorldScene extends Phaser.Scene {
       this.loadChunkResources(data.chunkId)
       this.loadChunkRooms(data.chunkId)
     }
+  }
+
+  private onTownTeleportConfirmed = (data: { townId: number; name: string; position: { x: number; y: number }; chunkId: string }) => {
+    this.onFriendTeleportConfirmed({ characterId: '', nickname: data.name, position: data.position, chunkId: data.chunkId })
+    EventBus.emit('game:toast', { message: `已传送至 ${data.name}`, type: 'success' })
   }
 
   // ==================== 聊天室房屋 ====================
