@@ -5,7 +5,7 @@ import type { TownDTO } from '../EventBus'
 
 export interface ServerToClientEvents {
   echo: (payload: unknown) => void
-  'player:move-confirmed': (data: { position: { x: number; y: number }; chunkId: string }) => void
+  'player:move-confirmed': (data: { position: { x: number; y: number }; chunkId: string; equippedVehicle?: { id: number; vehicleType: 'horse' | 'cart'; speedMultiplier: number } | null }) => void
   'players:in-chunk': (data: { players: Array<{ characterId: string; nickname: string; position: { x: number; y: number } }> }) => void
   'players:position-update': (data: { characterId: string; position: { x: number; y: number } }) => void
   'player:enter-chunk': (data: { characterId: string; nickname: string; position: { x: number; y: number } }) => void
@@ -138,6 +138,9 @@ class SocketClient {
 
     this.socket.on('connect', () => {
       EventBus.emit('socket:connected')
+    })
+    this.socket.on('player:move-confirmed', (data) => {
+      EventBus.emit('vehicle:equipped', data.equippedVehicle ?? null)
     })
 
     // 迷雾：初始已探索列表 + 新探索区块

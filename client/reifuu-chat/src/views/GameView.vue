@@ -10,6 +10,8 @@ import { useUserStore } from '../stores/user'
 import { useExplorationStore } from '../stores/exploration'
 import { useCharacterStore } from '../stores/character'
 import { useInventoryStore } from '../stores/inventory'
+import { useVehicleStore } from '../stores/vehicle'
+import VehicleCraftPanel from '../components/game/HUD/VehicleCraftPanel.vue'
 import { useRoomStore } from '../stores/room'
 import { useInteriorStore } from '../stores/interior'
 import FriendListPanel from '../components/game/HUD/FriendListPanel.vue'
@@ -29,6 +31,7 @@ const userStore = useUserStore()
 const explorationStore = useExplorationStore()
 const characterStore = useCharacterStore()
 const inventoryStore = useInventoryStore()
+const vehicleStore = useVehicleStore()
 const roomStore = useRoomStore()
 const interiorStore = useInteriorStore()
 const friendStore = useFriendStore()
@@ -50,6 +53,7 @@ const selectedPlayer = ref<{ characterId: string; nickname: string } | null>(nul
 
 // ---- 背包 / 建造 ----
 const showInventory = ref(false)
+const showVehicle = ref(false)
 const showBuildMenu = ref(false)
 const templates = ref<BuildTemplateDTO[]>([])
 const ownedChunks = ref<OwnedChunkDTO[]>([])
@@ -278,6 +282,8 @@ onMounted(() => {
 
   // 初始拉取背包
   refreshInventory()
+  vehicleStore.fetch().catch(() => { /* panel will retry when opened */ })
+  vehicleStore.listen()
 })
 
 onBeforeUnmount(() => {
@@ -335,6 +341,7 @@ onBeforeUnmount(() => {
         <button class="action-btn" @click="showInventory = !showInventory">
           🎒 背包 ({{ inventoryStore.usedSlots }}/{{ inventoryStore.capacity }})
         </button>
+        <button class="action-btn" @click="showVehicle = !showVehicle">🐎 交通工具</button>
         <button class="action-btn" @click="openBuildMenu">🏠 建造</button>
         <button class="action-btn" @click="showFriends = !showFriends">
           👥 好友 ({{ friendStore.friends.length }})
@@ -372,6 +379,7 @@ onBeforeUnmount(() => {
         </ul>
         <p v-else class="empty">背包为空，去采集资源吧</p>
       </div>
+      <div v-if="showVehicle" class="panel"><VehicleCraftPanel /></div>
 
       <div v-if="showBuildMenu" class="panel">
         <h3>建造聊天室</h3>
@@ -455,6 +463,9 @@ onBeforeUnmount(() => {
               <span class="mobile-btn-label">背包</span>
               <span class="mobile-btn-badge">{{ inventoryStore.usedSlots }}/{{ inventoryStore.capacity }}</span>
             </button>
+            <button class="mobile-action-btn" @click="showVehicle = !showVehicle; showMobileMenu = false">
+              <span class="mobile-btn-icon">🐎</span><span class="mobile-btn-label">交通工具</span>
+            </button>
             <button class="mobile-action-btn" @click="openBuildMenu(); showMobileMenu = false">
               <span class="mobile-btn-icon">🏠</span>
               <span class="mobile-btn-label">建造</span>
@@ -498,6 +509,11 @@ onBeforeUnmount(() => {
     </Transition>
 
     <!-- 移动端面板（全屏显示） -->
+    <Transition name="slide-up">
+      <div v-if="isMobile && showVehicle" class="mobile-panel-overlay">
+        <div class="mobile-panel"><div class="mobile-panel-header"><h3>交通工具</h3><button class="close-panel-btn" @click="showVehicle = false">✕</button></div><div class="mobile-panel-content"><VehicleCraftPanel /></div></div>
+      </div>
+    </Transition>
     <Transition name="slide-up">
       <div v-if="isMobile && showInventory" class="mobile-panel-overlay">
         <div class="mobile-panel">

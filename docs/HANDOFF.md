@@ -2,7 +2,7 @@
 
 > 本文件用于**当前团队 → 下一个团队**的工作交接。它记录项目当前真实状态、已完成/进行中/待办工作、团队结构、运行方式与已知问题。
 > 下一个团队接手时，请先通读本文件 + `docs/GDD.md`，再检查代码现状。
-> 最后更新：2026-09-05（团队系统 §6.9、房屋内部系统 §6.10、移动端适配 §6.11、传送门系统 §6.12 追加）
+> 最后更新：2026-09-05（交通工具系统 §6.13 追加）
 
 ---
 
@@ -402,6 +402,16 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 
 ---
 
+## 6.13 ⭐ 交通工具系统（Phase 3：马匹/马车，✅ 前后端均已完成）
+
+- `vehicles` 表及迁移 `server/src/db/migrations/003-vehicles.sql`，模板成本为木材 50 + 石材 20，速度倍率 150%。
+- `GET /vehicle/templates`、`GET /vehicle`、`POST /vehicle/craft`、`POST /vehicle/:vehicleId/equip`、`POST /vehicle/unequip` 均需 JWT。
+- `MovementService` 按装备载具将单次移动上限从 10 提升至 15，并在 `player:move-confirmed` 与 `GET /character/me` 返回装备状态。
+- 客户端 `VehicleCraftPanel.vue`、`stores/vehicle.ts` 已接入 GameView 桌面侧栏及移动端菜单。
+- 初始化数据库时执行最新 schema 或单独执行 003 迁移。
+
+---
+
 ## 7. 测试账号（仍在数据库中）
 
 | 账号 | 密码 | 角色 | 出生区块 | 世界坐标 |
@@ -436,7 +446,7 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 - **初始视野范围口径已统一**：GDD 2.6 写 5x5，服务端已用 `exploreArea(..., 2)` = 5x5。若策划后续改口径，改 `server/src/socket.ts` 的半径。
 - ~~前端迷雾完全未做~~（**已解决**，§5.2 完成）。
 - 小地图、资源节点/建造/聊天室前端交互 UI（**已补齐**：`WorldScene` 资源节点渲染 + `GameView` 背包/建造面板）。
-- ~~好友系统~~（**已完成** §6.7）；交通工具系统仍未实现（GDD Phase 4）。
+- ~~好友系统~~（**已完成** §6.7）；高级交通工具系统仍未实现（GDD Phase 4.5）。
 - 聊天室成员角色（房主/成员/访客）目前仅有房主 vs 访客二分，邀请制与成员管理未实现（见 §6.2）。
 - ~~飞鸽传信~~（**已完成** §6.8）：仅建表 → 现 service/routes/socket/UI 均已实现并验证通过。
 - 数据库 `192.168.12.1` 是内网地址，换环境/远程时需改 `.env`（曾有短暂不可达导致 500）。

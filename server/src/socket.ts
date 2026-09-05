@@ -284,6 +284,7 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
         socket.emit('player:move-confirmed', {
           position: result.position,
           chunkId: result.chunkId,
+          equippedVehicle: result.equippedVehicle,
         });
       } catch (error: any) {
         logger.error('Player move error', error);

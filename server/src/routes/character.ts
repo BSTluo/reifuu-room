@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import CharacterService from '../services/CharacterService.js';
 import { authenticate } from '../middleware/auth.js';
+import VehicleService from '../services/VehicleService.js';
 
 const router = Router();
 
@@ -61,7 +62,7 @@ router.get('/me', async (req: Request, res: Response, next: NextFunction) => {
       });
     }
 
-    res.json({ status: 'success', data: character });
+    res.json({ status: 'success', data: { ...character, equippedVehicle: await VehicleService.getEquipped(String(character.id)) } });
   } catch (error) {
     next(error);
   }

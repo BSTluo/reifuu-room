@@ -38,6 +38,7 @@ export interface CharacterDTO {
   continent: Continent
   currentChunkId: string
   position: { x: number; y: number }
+  equippedVehicle?: VehicleDTO | null
 }
 
 export type ResourceType = 'wood' | 'stone' | 'mineral'
@@ -54,6 +55,22 @@ export interface ResourceNodeDTO {
 export interface InventoryItemDTO {
   itemType: string
   quantity: number
+}
+export type VehicleType = 'horse' | 'cart'
+export interface VehicleDTO {
+  id: number
+  characterId: string
+  vehicleType: VehicleType
+  speedMultiplier: number
+  durability: number | null
+  equipped: boolean
+  createdAt: string
+}
+export interface VehicleTemplateDTO {
+  vehicleType: VehicleType
+  name: string
+  speedMultiplier: number
+  requirements: { itemType: string; quantity: number }[]
 }
 
 export interface BuildTemplateDTO {
