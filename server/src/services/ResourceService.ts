@@ -1,7 +1,7 @@
 import { query } from '../db/mysql.js';
 import logger from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
-import { isOceanChunk } from './MovementService.js';
+import { isOceanChunk, isIslandChunk } from './MovementService.js';
 
 interface ResourceNode {
   id: number;
@@ -47,8 +47,29 @@ export class ResourceService {
       const chunkX = parts[0] ?? 0;
       const chunkY = parts[1] ?? 0;
       const ocean = isOceanChunk(chunkX, chunkY);
+      const island = isIslandChunk(chunkX, chunkY);
 
-      if (ocean) {
+      if (island) {
+        // Island chunk: land resources on island interior + coral in surrounding waters (GDD §2.8 小岛区块)
+        const woodCount = 2 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < woodCount; i++) {
+          await this.createResourceNode(chunkId, 'wood');
+        }
+        const stoneCount = 1 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < stoneCount; i++) {
+          await this.createResourceNode(chunkId, 'stone');
+        }
+        // 50% chance of mineral on island (hidden treasure feel)
+        if (Math.random() < 0.5) {
+          await this.createResourceNode(chunkId, 'mineral');
+        }
+        // Coral in surrounding waters
+        const coralCount = 1 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < coralCount; i++) {
+          await this.createResourceNode(chunkId, 'coral');
+        }
+        logger.info(`Generated island resources for chunk ${chunkId}`);
+      } else if (ocean) {
         // Ocean chunk: coral (2-4) + deep_mineral (0-2, rare)
         const coralCount = 2 + Math.floor(Math.random() * 3);
         for (let i = 0; i < coralCount; i++) {

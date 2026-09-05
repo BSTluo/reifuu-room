@@ -16,6 +16,7 @@ import PigeonMailService from './services/PigeonMailService.js';
 import TeamService from './services/TeamService.js';
 import TownService from './services/TownService.js';
 import PassengerService from './services/PassengerService.js';
+import IslandChatRoomService from './services/IslandChatRoomService.js';
 import { calculateChunkLimit } from './services/TeamService.js';
 import { query } from './db/mysql.js';
 import RoomMembershipService from './services/RoomMembershipService.js';
@@ -259,6 +260,10 @@ export const initializeSocketIO = (httpServer: HTTPServer) => {
             1
           );
           await TownService.markVisit(character.id, result.chunkId);
+
+          // 小岛区块隐藏聊天室自动生成（GDD §2.8）
+          await IslandChatRoomService.ensureIslandRoom(result.chunkId);
+
           if (newlyExplored.length > 0) {
             socket.emit('map:explore', { chunks: newlyExplored });
           }

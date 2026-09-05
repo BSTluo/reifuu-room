@@ -648,6 +648,74 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 
 ---
 
+## 6.18 ⭐ 小岛区块系统（GDD §2.8 line 358 小岛区块，✅ 前后端均已完成）
+
+### 6.18.1 功能概述
+
+GDD §2.8 line 358 规定："小岛区块（景观或隐藏聊天室，鼓励探索）"。本系统在海洋区块中确定性地标记约 10% 为小岛区块，生成中央陆地块 + 沙滩边缘 + 周围水域的地形。约 30% 的小岛区块自动生成隐藏聊天室（由系统角色拥有），玩家进入区块时触发发现通知 toast。
+
+### 6.18.2 岛屿检测
+
+- **确定性检测**：使用 FNV-1a 哈希 `island_{chunkX}_{chunkY}`，结果 < 0x1999999A（约 10%）标记为小岛。
+- **客户端**：`client/reifuu-chat/src/game/utils/world.ts` — `isIslandChunk(chunkX, chunkY)` + `isOceanChunk()`。
+- **服务端**：`server/src/services/MovementService.ts` — `isIslandChunk()` + `isWaterTile(worldX, worldY)`（逐 tile 水域判定）。
+- 排除原点区块 (0,0)，出生点附近无岛屿。
+
+### 6.18.3 岛屿地形
+
+- **客户端地形生成**（`world.ts` `getChunkTerrain()`）：
+  - 岛屿中央圆形陆地（半径 6 ± 1 tile），内部为 grass/dirt（10% dirt）。
+  - 沙滩环（宽度 2 tile），tile 类型 `sand`。
+  - 外围为 `water`。
+  - 半径微调用 chunkId 种子的 mulberry32 第一个随机值，与服务端 `isWaterTile()` 保持一致。
+- **新增 tile 类型**：`sand`（颜色 `0xe6d5a8`，在 `PreloadScene.ts` `TILE_COLORS` 中）。
+- **新增房屋模板**：`island_hut`（颜色 wall `0xd4a373`、roof `0x8b6f47`，在 `PreloadScene.ts` `generateHouseTextures()` 中）。
+
+### 6.18.4 移动验证
+
+- **服务端**（`MovementService.handlePlayerMove()`）：海洋区块移动验证从"整区块检查"改为"逐 tile 检查"——使用 `isWaterTile(worldX, worldY)` 判断目标 tile 是否为水域。岛屿陆地/沙滩 tile 允许徒步/马/车通行，水域 tile 仍需船只/飞艇。
+- **客户端**（`WorldScene.canEnterTile()`）：已使用 `getTileType()` 逐 tile 检查，`sand`/`grass`/`dirt` 均可通行，仅 `water` 需要船只/飞艇。无需额外修改。
+
+### 6.18.5 岛屿资源
+
+- **服务端**（`ResourceService.generateResourcesForChunk()`）：新增 `island` 分支：
+  - 陆地资源：wood（2-3）、stone（1-2）、50% 概率 mineral。
+  - 海洋资源：coral（1-2）生成在岛屿周围水域。
+- 资源位置仍为区块内随机，后续可优化为按 tile 类型分配。
+
+### 6.18.6 隐藏聊天室
+
+- **服务端**（`server/src/services/IslandChatRoomService.ts`）：
+  - `hasHiddenRoom(chunkX, chunkY)`：约 30% 的小岛区块有隐藏聊天室（哈希 `island_room_{cx}_{cy}` < 0x4ccccccd）。
+  - `ensureIslandRoom(chunkId)`：玩家进入区块时幂等创建聊天室，使用系统角色 `__system_island__` 拥有，模板 `island_hut`。
+  - 聊天室名称从 8 个氛围感名称中确定性选取。
+- **触发时机**：`socket.ts` 在 `chunkChanged` 时调用 `IslandChatRoomService.ensureIslandRoom(result.chunkId)`。
+- **数据库迁移**：`migrations/010-island-chunks.sql` 创建系统用户/角色 + 扩展 `chat_rooms.template` ENUM 添加 `island_hut`。
+
+### 6.18.7 客户端 UI
+
+- **发现通知**：`WorldScene.checkIslandDiscovery()` 在区块切换时检测 `isIslandChunk()`，触发 `game:toast` 事件显示 "🏝️ 发现小岛！探索这片未知的土地吧"。
+- **房屋渲染**：`island_hut` 模板在 `PreloadScene` 生成贴图，`WorldScene.loadChunkRooms()` 自动渲染（与普通房屋相同流程）。
+- **地形渲染**：`sand` tile 在 `PreloadScene` 生成贴图，`WorldScene.populateChunkBobs()` 自动渲染。
+
+### 6.18.8 验证方式
+
+```bash
+# 服务端类型检查
+cd server && npx tsc --noEmit
+
+# 客户端构建
+cd client/reifuu-chat && npm run build
+```
+
+### 6.18.9 注意事项
+
+- 岛屿检测、地形生成、水域判定的哈希算法在服务端和客户端完全一致（FNV-1a + mulberry32）。
+- 系统角色 `__system_island__` 需通过 migration 010 创建后岛屿聊天室才能生效。
+- 岛屿资源位置为区块内随机，未来可优化为按 tile 类型（仅在陆地 tile 上生成陆地资源）。
+
+---
+
 ## 7. 测试账号（仍在数据库中）
 
 | 账号 | 密码 | 角色 | 出生区块 | 世界坐标 |
@@ -686,7 +754,7 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
   - ~~高级交通工具~~（**已完成** §6.14：船只/飞艇/海洋区块/海岸寻路，2026-09 追加）。
   - ~~载客逻辑~~（**已完成** §6.16：邀请/上车/跟随/踢出/下车全流程，2026-09 追加）。
   - ~~海洋资源节点~~（**已完成** §6.17：珊瑚/深海矿物/magic_crystal 掉落，2026-09 追加）。
-  - **小岛区块**（GDD §2.8：海洋区块中的景观或隐藏聊天室）尚未实现，作为可选后续扩展。
+  - ~~小岛区块~~（**已完成** §6.18：岛屿检测/地形/资源/隐藏聊天室/发现通知，2026-09 追加）。
 - 聊天室公开房间仍支持访客访问；私有房间使用 §6.2 的邀请制成员权限。
 - ~~飞鸽传信~~（**已完成** §6.8）：仅建表 → 现 service/routes/socket/UI 均已实现并验证通过。
 - 数据库 `192.168.12.1` 是内网地址，换环境/远程时需改 `.env`（曾有短暂不可达导致 500）。
@@ -708,7 +776,7 @@ curl -X POST http://localhost:3000/auth/login -H "Content-Type: application/json
 9. **后续功能**：
    - ~~高级交通工具（Phase 4.5）：船只、飞行器跨洲。~~（**已完成** §6.14 + §6.16 载客 + §6.17 海洋资源）
    - ~~邀请码出生系统（GDD §2.1）~~（**已完成** §6.15）。
-   - 小岛区块（GDD §2.8 海洋内容）：海洋区块中的景观或隐藏聊天室，鼓励探索。可选后续扩展。
+   - ~~小岛区块（GDD §2.8 海洋内容）~~（**已完成** §6.18：岛屿检测/地形/资源/隐藏聊天室/发现通知）。
    - 房间装饰/家具系统扩展：自定义贴图、动画。
    - **Phase 5（打磨与上线准备）**：性能优化、反作弊补强、数值平衡调优、部署监控、插件市场UI、SDK文档与示例。
    - **Phase 6（插件生态启动，可选）**：SDK正式版、插件市场开放社区上传、开发者激励。

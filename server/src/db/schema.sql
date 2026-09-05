@@ -181,7 +181,7 @@ CREATE TABLE IF NOT EXISTS chat_rooms (
     chunk_id VARCHAR(50) NOT NULL UNIQUE,
     owner_id INT NOT NULL,
     name VARCHAR(100) NOT NULL,
-    template ENUM('wooden_house', 'stone_house', 'advanced_house') NOT NULL,
+    template ENUM('wooden_house', 'stone_house', 'advanced_house', 'island_hut') NOT NULL,
     decorations JSON,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

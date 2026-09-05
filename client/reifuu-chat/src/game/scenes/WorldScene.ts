@@ -4,7 +4,7 @@ import { OtherPlayerSprite } from '../entities/OtherPlayerSprite'
 import { PlayerSprite } from '../entities/PlayerSprite'
 import { socketClient } from '../network/SocketClient'
 import { gridToIso, isoToGrid, TILE_WIDTH, TILE_HEIGHT } from '../utils/isometric'
-import { CHUNK_SIZE, getChunkTerrain, chunkIdToWorldOrigin, worldToChunkId, getTileType } from '../utils/world'
+import { CHUNK_SIZE, getChunkTerrain, chunkIdToWorldOrigin, worldToChunkId, getTileType, isIslandChunk, chunkIdToOrigin } from '../utils/world'
 import { useCharacterStore } from '../../stores/character'
 import { useExplorationStore } from '../../stores/exploration'
 import type { ChunkFogState } from '../../stores/exploration'
@@ -553,9 +553,11 @@ export class WorldScene extends Phaser.Scene {
     characterStore.setPosition(data.position.x, data.position.y)
 
     if (data.chunkId !== this.currentChunkId) {
+      const prevChunkId = this.currentChunkId
       this.currentChunkId = data.chunkId
       EventBus.emit('player:chunk-changed', { chunkId: data.chunkId })
       this.refreshFog()
+      this.checkIslandDiscovery(data.chunkId, prevChunkId)
     }
   }
 
@@ -590,17 +592,27 @@ export class WorldScene extends Phaser.Scene {
     characterStore.setPosition(data.position.x, data.position.y)
 
     if (data.chunkId !== this.currentChunkId) {
+      const prevChunkId = this.currentChunkId
       this.currentChunkId = data.chunkId
       EventBus.emit('player:chunk-changed', { chunkId: data.chunkId })
       this.refreshFog()
       this.loadChunkResources(data.chunkId)
       this.loadChunkRooms(data.chunkId)
+      this.checkIslandDiscovery(data.chunkId, prevChunkId)
     }
   }
 
   private onTownTeleportConfirmed = (data: { townId: number; name: string; position: { x: number; y: number }; chunkId: string }) => {
     this.onFriendTeleportConfirmed({ characterId: '', nickname: data.name, position: data.position, chunkId: data.chunkId })
     EventBus.emit('game:toast', { message: `已传送至 ${data.name}`, type: 'success' })
+  }
+
+  /** 小岛区块发现通知（GDD §2.8 小岛区块） */
+  private checkIslandDiscovery(newChunkId: string, _prevChunkId: string | null): void {
+    const { chunkX, chunkY } = chunkIdToOrigin(newChunkId)
+    if (isIslandChunk(chunkX, chunkY)) {
+      EventBus.emit('game:toast', { message: '🏝️ 发现小岛！探索这片未知的土地吧', type: 'success' })
+    }
   }
 
   // ==================== 聊天室房屋 ====================

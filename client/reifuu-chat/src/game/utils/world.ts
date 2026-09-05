@@ -43,9 +43,29 @@ export function isOceanChunk(chunkX: number, chunkY: number): boolean {
 }
 
 /**
+ * 小岛区块检测（GDD §2.8 line 358）。
+ * 约 10% 的海洋区块被确定性地标记为小岛区块。
+ * 服务端与客户端使用相同哈希函数，确保结果一致。
+ */
+export function isIslandChunk(chunkX: number, chunkY: number): boolean {
+  if (!isOceanChunk(chunkX, chunkY)) return false
+  // 排除原点区块 (0,0) — 出生点附近不应有岛屿
+  if (chunkX === 0 && chunkY === 0) return false
+  const seed = hashStringToSeed(`island_${chunkX}_${chunkY}`)
+  // seed < 2^32 * 0.1 → 约 10% 概率
+  return seed < 0x1999999A
+}
+
+/** 岛屿中心半径（tile 数），岛屿主体陆地的半径 */
+export const ISLAND_RADIUS = 6
+/** 岛屿海滩宽度（tile 数），从陆地边缘向外的沙地宽度 */
+export const ISLAND_BEACH_WIDTH = 2
+
+/**
  * 生成（并缓存）某区块的确定性地形。
  * 海洋区块（洲际轴带）整体为 'water'；陆地区块每个 tile 为
  * 'grass' 或 'dirt'（10% 概率）。
+ * 小岛区块：中心陆地 + 沙滩边缘 + 周围水域。
  */
 export function getChunkTerrain(chunkId: string): string[][] {
   const cached = terrainCache.get(chunkId)
@@ -53,7 +73,30 @@ export function getChunkTerrain(chunkId: string): string[][] {
 
   const { chunkX, chunkY } = chunkIdToOrigin(chunkId)
   const terrain: string[][] = []
-  if (isOceanChunk(chunkX, chunkY)) {
+  if (isIslandChunk(chunkX, chunkY)) {
+    // 小岛区块：中央圆形陆地区域 + 沙滩 + 海水
+    const random = createSeededRandom(hashStringToSeed(chunkId))
+    const center = CHUNK_SIZE / 2
+    // 岛屿半径随机微调 (±2) 以增加多样性
+    const islandRadius = ISLAND_RADIUS + Math.floor(random() * 3) - 1
+    const beachOuter = islandRadius + ISLAND_BEACH_WIDTH
+    for (let y = 0; y < CHUNK_SIZE; y++) {
+      terrain[y] = []
+      for (let x = 0; x < CHUNK_SIZE; x++) {
+        const dist = Math.sqrt((x - center) ** 2 + (y - center) ** 2)
+        if (dist <= islandRadius) {
+          // 岛屿内部：草地或泥土（10%）
+          terrain[y][x] = random() < 0.1 ? 'dirt' : 'grass'
+        } else if (dist <= beachOuter) {
+          // 沙滩
+          terrain[y][x] = 'sand'
+        } else {
+          // 海水
+          terrain[y][x] = 'water'
+        }
+      }
+    }
+  } else if (isOceanChunk(chunkX, chunkY)) {
     for (let y = 0; y < CHUNK_SIZE; y++) {
       terrain[y] = []
       for (let x = 0; x < CHUNK_SIZE; x++) {

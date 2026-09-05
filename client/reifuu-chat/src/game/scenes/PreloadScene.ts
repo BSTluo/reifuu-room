@@ -5,6 +5,7 @@ const TILE_COLORS: Record<string, number> = {
   grass: 0x4caf6b,
   dirt: 0xa0703f,
   water: 0x4a90d9,
+  sand: 0xe6d5a8,
 }
 
 /** 资源节点颜色（像素中世纪占位画风，后续替换正式美术） */
@@ -119,6 +120,7 @@ export class PreloadScene extends Phaser.Scene {
       wooden_house: { wall: 0x8b5a2b, roof: 0x5d4037 },
       stone_house: { wall: 0x9e9e9e, roof: 0x616161 },
       advanced_house: { wall: 0x7e57c2, roof: 0x4527a0 },
+      island_hut: { wall: 0xd4a373, roof: 0x8b6f47 },
     }
 
     const width = 48

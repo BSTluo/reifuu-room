@@ -36,6 +36,65 @@ export function isOceanChunk(chunkX: number, chunkY: number): boolean {
   return Math.abs(chunkX) < OCEAN_CHUNK_WIDTH || Math.abs(chunkY) < OCEAN_CHUNK_WIDTH;
 }
 
+/**
+ * FNV-1a 32-bit hash（与客户端 rng.ts hashStringToSeed 保持一致）。
+ */
+function hashStringToSeed(str: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/**
+ * 小岛区块检测（GDD §2.8 line 358）。
+ * 约 10% 的海洋区块被确定性地标记为小岛区块。
+ * 与客户端 world.ts isIslandChunk 使用相同算法。
+ */
+export function isIslandChunk(chunkX: number, chunkY: number): boolean {
+  if (!isOceanChunk(chunkX, chunkY)) return false;
+  if (chunkX === 0 && chunkY === 0) return false;
+  const seed = hashStringToSeed(`island_${chunkX}_${chunkY}`);
+  return seed < 0x1999999A;
+}
+
+/** 岛屿中心半径与沙滩宽度（与客户端 world.ts 保持一致） */
+const ISLAND_RADIUS = 6;
+const ISLAND_BEACH_WIDTH = 2;
+const CHUNK_SIZE = 32;
+
+/**
+ * 判断给定世界坐标处的 tile 是否为水域。
+ * 小岛区块内部有陆地 tile，需要逐 tile 判定。
+ */
+export function isWaterTile(worldX: number, worldY: number): boolean {
+  const chunkX = Math.floor(worldX / CHUNK_SIZE);
+  const chunkY = Math.floor(worldY / CHUNK_SIZE);
+  if (!isOceanChunk(chunkX, chunkY)) return false;
+  if (!isIslandChunk(chunkX, chunkY)) return true; // 纯海洋区块
+  // 小岛区块：检查 tile 是否在岛屿陆地/沙滩范围内
+  const localX = worldX - chunkX * CHUNK_SIZE;
+  const localY = worldY - chunkY * CHUNK_SIZE;
+  const center = CHUNK_SIZE / 2;
+  // 使用与客户端相同的种子生成半径微调
+  const chunkId = `${chunkX}_${chunkY}`;
+  const seed = hashStringToSeed(chunkId);
+  // mulberry32 第一步
+  const r = (() => {
+    let s = seed;
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  })();
+  const islandRadius = ISLAND_RADIUS + Math.floor(r * 3) - 1;
+  const beachOuter = islandRadius + ISLAND_BEACH_WIDTH;
+  const dist = Math.sqrt((localX - center) ** 2 + (localY - center) ** 2);
+  return dist > beachOuter;
+}
+
 export class MovementService {
   // Maximum allowed movement distance per update (to prevent teleporting)
   private readonly MAX_MOVE_DISTANCE = 10;
@@ -163,9 +222,10 @@ export class MovementService {
       const newChunkId = this.getChunkId(newPosition.x, newPosition.y);
       const chunkChanged = oldChunkId !== newChunkId;
 
-      // GDD 2.8 terrain validation: ocean chunks require ship/airship
+      // GDD 2.8 terrain validation: ocean water tiles require ship/airship
+      // 小岛区块内部有陆地 tile，需逐 tile 判定（GDD §2.8 小岛区块）
       const [newCX, newCY] = newChunkId.split('_').map(Number);
-      if (isOceanChunk(newCX || 0, newCY || 0)) {
+      if (isOceanChunk(newCX || 0, newCY || 0) && isWaterTile(newPosition.x, newPosition.y)) {
         const capability = await VehicleService.getEquippedTerrainCapability(characterId);
         if (capability !== 'water' && capability !== 'all') {
           throw new AppError('需要船只才能通行海洋区块', 403);
